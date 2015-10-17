@@ -100,6 +100,7 @@ class TraceRoute(object):
                         hostname = match.groups()[0]
                         state = IP_S
                         continue
+                    print 'err ip host s'
                     state = ERROR_S
                 elif state == IP_S:
                     # Parse the IP Section.
@@ -112,6 +113,7 @@ class TraceRoute(object):
                         row_glob.append(hop)
                         state = DELAY_S
                         continue
+                    print 'err ip s'
                     state = ERROR_S
                 elif state == DELAY_S:
                     # Parse the value of delay.
@@ -121,6 +123,7 @@ class TraceRoute(object):
                         delay = match.groups()[0]
                         state = D_UNIT_S
                         continue
+                    print 'err delay s'
                     state = ERROR_S
                 elif state == D_UNIT_S:
                     # Parse the unit of the delay.
@@ -146,6 +149,7 @@ class TraceRoute(object):
                             # This is terminal.
                             continue
                     # We encountered an error.
+                    print 'err d unit s'
                     state = ERROR_S
                 else:
                     raise Exception('Undefined state {}'.format(cnt))
