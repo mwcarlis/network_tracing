@@ -76,7 +76,6 @@ class TraceRoute(object):
 
         milisec = 'ms'
         # Header = namedtuple('header', ['dest', 'dest_ip', 'max_hops', 'packet_Blen'])
-        print table
         h_row= table[0]
         header = Header(h_row[2], h_row[3].strip('(),'), int(h_row[4]), int(h_row[7]))
         trace_globs = { 0: header}
@@ -95,6 +94,10 @@ class TraceRoute(object):
                     if not match:
                         # Our hostname RE also matches IP's.  Test IP first.
                         match = re.match(self.HOSTNAME_RE, item)
+                    if not match:
+                        # The local network has Project_Network as hostname
+                        match = re.match(r'(Project_Network)', item)
+
                     if match:
                         ### Next State
                         hostname = match.groups()[0]
@@ -109,7 +112,6 @@ class TraceRoute(object):
                         ### Next state
                         ip_addr = match.groups()[0]
                         hop = Hop(hostname, ip_addr)
-                        # print hop,
                         row_glob.append(hop)
                         state = DELAY_S
                         continue
@@ -127,9 +129,8 @@ class TraceRoute(object):
                     state = ERROR_S
                 elif state == D_UNIT_S:
                     # Parse the unit of the delay.
-                    if milisec == item:
+                    if milisec in item:
                         time_delay = Delay(delay, milisec)
-                        # print time_delay,
                         row_glob.append(time_delay)
                         # Is this the last item?
                         if cnt + 2 < len(row):
@@ -146,25 +147,31 @@ class TraceRoute(object):
                                 # Next is a host or IP. Restart.
                                 state = IP_HOST_S
                                 continue
-                            # This is terminal.
-                            continue
+                        # This is terminal.
+                        continue
                     # We encountered an error.
                     print 'err d unit s'
                     state = ERROR_S
                 else:
+                    print trace_globs
                     raise Exception('Undefined state {}'.format(cnt))
-            #print ''
             # Go to the next row.  Make this row first.
             if count + 1 not in trace_globs:
                 trace_globs[count+1] = tuple(row_glob)
         return trace_globs
 
 
-
-
 class whois(object):
     def __init__(self, ip):
         pass
 
+
+def test_trace_route(domain='www.google.com'):
+    """Test the trace route object on domain.
+    """
+    trc = TraceRoute(domain)
+    print trc.trace_map
+
 if __name__ == '__main__':
-    pass
+    test_trace_route()
+

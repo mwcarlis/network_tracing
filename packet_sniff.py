@@ -108,11 +108,11 @@ class PacketSniffer(threading.Thread):
         return self.shared_queue
 
 
-def test_sniffer(max_packets=100):
+def test_packet_sniffer(max_packets=100):
     """Receive a number (max_packets) of packets to test PacketSniffer(object)
     """
     shared_queue = Queue.Queue()
-    pck = PacketSniffer(shared_queue)
+    pckt_sniffer = PacketSniffer(shared_queue)
     counter = 0
     while counter < max_packets:
         try:
@@ -123,7 +123,7 @@ def test_sniffer(max_packets=100):
             continue
         counter += 1
     # Tell the thread to die.
-    pck.alive.clear()
+    pckt_sniffer.alive.clear()
     # Make sure the Queue is Empty.
     counter = 0
     while True:
@@ -135,7 +135,7 @@ def test_sniffer(max_packets=100):
         counter += 1
     print 'TEST SNIFFER COMPLETE'
 
-def test_receive(max_packets=100):
+def test_receive_packet(max_packets=100):
     """Receive a number (max_packets) of packets as a test and print to stout.
     """
     try:
@@ -156,7 +156,7 @@ def test_receive(max_packets=100):
 
 
 if __name__ == '__main__':
-    test_receive()
-    test_sniffer()
+    test_receive_packet()
+    test_packet_sniffer()
 
 
