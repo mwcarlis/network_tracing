@@ -13,12 +13,12 @@ import threading
 import Queue
 
 
-PACKET_ELEMS = [
+PACKET_ELEMS = (
     'version', 'ip_header_length', 'ttl',
     'protocol', 'src_address', 'dest_address',
     'src_port', 'dest_port', 'sequence_number',
     'ack', 'tcp_header_length'
-]
+)
 PACKET = namedtuple('packet', PACKET_ELEMS)
 
 
@@ -76,20 +76,19 @@ def receive_packet(sock):
     return pkt_obj
 
 class PacketSniffer(threading.Thread):
+    """A Packet Sniffing object with threading.
+    """
 
     def __init__(self, shared_queue=None):
         super(PacketSniffer, self).__init__()
-        self.alive = threading.Event()
-        self.alive.set()
-        self.start()
 
-        if isinstance(queue, Queue.Queue):
+        if isinstance(shared_queue, Queue.Queue):
             self.shared_queue = shared_queue
         else:
             self.shared_queue = Queue.Queue()
-
-    def get_queue(self):
-        return self.shared_queue
+        self.alive = threading.Event()
+        self.alive.set()
+        self.start()
 
     def connect(self):
         try:
@@ -100,12 +99,41 @@ class PacketSniffer(threading.Thread):
 
     def run(self):
         self.connect()
-
         while self.alive.isSet():
             pkt_obj = receive_packet(self.sock)
             # Send the packet details upstream.
             self.shared_queue.put(pkt_obj)
 
+    def get_queue(self):
+        return self.shared_queue
+
+
+def test_sniffer(max_packets=100):
+    """Receive a number (max_packets) of packets to test PacketSniffer(object)
+    """
+    shared_queue = Queue.Queue()
+    pck = PacketSniffer(shared_queue)
+    counter = 0
+    while counter < max_packets:
+        try:
+            pkt_obj = shared_queue.get(block=True)
+            print '{}: {}\n'.format(counter, pkt_obj)
+            shared_queue.task_done()
+        except Queue.Empty:
+            continue
+        counter += 1
+    # Tell the thread to die.
+    pck.alive.clear()
+    # Make sure the Queue is Empty.
+    counter = 0
+    while True:
+        try:
+            pkt_obj = shared_queue.get(block=False)
+            print 'leftover-{}: {}'.format(counter, pkt_obj)
+        except Queue.Empty:
+            break
+        counter += 1
+    print 'TEST SNIFFER COMPLETE'
 
 def test_receive(max_packets=100):
     """Receive a number (max_packets) of packets as a test and print to stout.
@@ -122,11 +150,13 @@ def test_receive(max_packets=100):
     while counter < max_packets:
         # receive a packet
         pkt_obj = receive_packet(sock)
-        print pkt_obj.__repr__() + '\n'
+        print '{}: {}\n'.format(counter, pkt_obj.__repr__())
         counter += 1
-    print 'TEST COMPLETE'
+    print 'TEST RECEIVE COMPLETE'
 
 
 if __name__ == '__main__':
     test_receive()
+    test_sniffer()
+
 
