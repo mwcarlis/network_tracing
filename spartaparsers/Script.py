@@ -22,9 +22,9 @@ if __name__ == '__main__':
     dom = xml.dom.minidom.parse('a-full.xml')
 
     for scriptNode in dom.getElementsByTagName('script'):
-		script = Script( scriptNode )
-		print script.scriptId
-		print script.output
+        script = Script( scriptNode )
+        print script.scriptId
+        print script.output
 
 
 

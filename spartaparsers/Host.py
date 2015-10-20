@@ -10,106 +10,106 @@ import Service, Script, OS, Port
 import xml.dom.minidom
 
 class Host:
-	ipv4 = ''
-	ipv6 = ''
-	macaddr = ''
-	status = 'none'
-	hostname = ''
-	vendor = ''
-	uptime = ''
-	lastboot = ''
-	distance = 0
-	state = ''
-	count = ''
+    ipv4 = ''
+    ipv6 = ''
+    macaddr = ''
+    status = 'none'
+    hostname = ''
+    vendor = ''
+    uptime = ''
+    lastboot = ''
+    distance = 0
+    state = ''
+    count = ''
 
-	def __init__( self, HostNode ):
-		self.host_node = HostNode
-		self.status = HostNode.getElementsByTagName('status')[0].getAttribute('state')
-		for e in HostNode.getElementsByTagName('address'):
-			if e.getAttribute('addrtype') == 'ipv4':
-				self.ipv4 = e.getAttribute('addr')
-			elif e.getAttribute('addrtype') == 'ipv6':
-				self.ipv6 = e.getAttribute('addr')
-			elif e.getAttribute('addrtype') == 'mac':
-				self.macaddr = e.getAttribute('addr')
-				self.vendor = e.getAttribute('vendor')
-		#self.ip = HostNode.getElementsByTagName('address')[0].getAttribute('addr');
-		self.ip = self.ipv4 # for compatibility with the original library
-		if len(HostNode.getElementsByTagName('hostname')) > 0:
-			self.hostname = HostNode.getElementsByTagName('hostname')[0].getAttribute('name')
-		if len(HostNode.getElementsByTagName('uptime')) > 0:
-			self.uptime = HostNode.getElementsByTagName('uptime')[0].getAttribute('seconds')
-			self.lastboot = HostNode.getElementsByTagName('uptime')[0].getAttribute('lastboot')
-		if len(HostNode.getElementsByTagName('distance')) > 0:
-			self.distance = int(HostNode.getElementsByTagName('distance')[0].getAttribute('value'))
-		if len(HostNode.getElementsByTagName('extraports')) > 0:
-			self.state = HostNode.getElementsByTagName('extraports')[0].getAttribute('state')
-			self.count = HostNode.getElementsByTagName('extraports')[0].getAttribute('count')
+    def __init__( self, HostNode ):
+        self.host_node = HostNode
+        self.status = HostNode.getElementsByTagName('status')[0].getAttribute('state')
+        for e in HostNode.getElementsByTagName('address'):
+            if e.getAttribute('addrtype') == 'ipv4':
+                self.ipv4 = e.getAttribute('addr')
+            elif e.getAttribute('addrtype') == 'ipv6':
+                self.ipv6 = e.getAttribute('addr')
+            elif e.getAttribute('addrtype') == 'mac':
+                self.macaddr = e.getAttribute('addr')
+                self.vendor = e.getAttribute('vendor')
+        #self.ip = HostNode.getElementsByTagName('address')[0].getAttribute('addr');
+        self.ip = self.ipv4 # for compatibility with the original library
+        if len(HostNode.getElementsByTagName('hostname')) > 0:
+            self.hostname = HostNode.getElementsByTagName('hostname')[0].getAttribute('name')
+        if len(HostNode.getElementsByTagName('uptime')) > 0:
+            self.uptime = HostNode.getElementsByTagName('uptime')[0].getAttribute('seconds')
+            self.lastboot = HostNode.getElementsByTagName('uptime')[0].getAttribute('lastboot')
+        if len(HostNode.getElementsByTagName('distance')) > 0:
+            self.distance = int(HostNode.getElementsByTagName('distance')[0].getAttribute('value'))
+        if len(HostNode.getElementsByTagName('extraports')) > 0:
+            self.state = HostNode.getElementsByTagName('extraports')[0].getAttribute('state')
+            self.count = HostNode.getElementsByTagName('extraports')[0].getAttribute('count')
 
-	def get_OS(self):
-		oss = []
+    def get_OS(self):
+        oss = []
 
-		for OS_node in self.host_node.getElementsByTagName('osclass'):
-			os = OS.OS(OS_node)
-			oss.append(os)
+        for OS_node in self.host_node.getElementsByTagName('osclass'):
+            os = OS.OS(OS_node)
+            oss.append(os)
 
-		for OS_node in self.host_node.getElementsByTagName('osmatch'):
-			os = OS.OS(OS_node)
-			oss.append(os)
+        for OS_node in self.host_node.getElementsByTagName('osmatch'):
+            os = OS.OS(OS_node)
+            oss.append(os)
 
-		return oss
+        return oss
 
-	def all_ports( self ):
-		
-		ports = [ ]
+    def all_ports( self ):
 
-		for port_node in self.host_node.getElementsByTagName('port'):
-			p = Port.Port(port_node)
-			ports.append(p)
+        ports = [ ]
 
-		return ports
+        for port_node in self.host_node.getElementsByTagName('port'):
+            p = Port.Port(port_node)
+            ports.append(p)
 
-	def get_ports( self, protocol, state ):
-		'''get a list of ports which is in the special state'''
+        return ports
 
-		open_ports = [ ]
+    def get_ports( self, protocol, state ):
+        '''get a list of ports which is in the special state'''
 
-		for port_node in self.host_node.getElementsByTagName('port'):
-			if port_node.getAttribute('protocol') == protocol and port_node.getElementsByTagName('state')[0].getAttribute('state') == state:
-				open_ports.append( port_node.getAttribute('portid') )
+        open_ports = [ ]
 
-		return open_ports
+        for port_node in self.host_node.getElementsByTagName('port'):
+            if port_node.getAttribute('protocol') == protocol and port_node.getElementsByTagName('state')[0].getAttribute('state') == state:
+                open_ports.append( port_node.getAttribute('portid') )
 
-	def get_scripts( self ):
+        return open_ports
 
-		scripts = [ ]
+    def get_scripts( self ):
 
-		for script_node in self.host_node.getElementsByTagName('script'):
-			scr = Script.Script(script_node)
-			scripts.append(scr)
+        scripts = [ ]
 
-		return scripts
-		
-	def get_hostscripts( self ):
+        for script_node in self.host_node.getElementsByTagName('script'):
+            scr = Script.Script(script_node)
+            scripts.append(scr)
 
-		scripts = [ ]
-		for hostscript_node in self.host_node.getElementsByTagName('hostscript'):
-			for script_node in hostscript_node.getElementsByTagName('script'):
-				scr = Script.Script(script_node)
-				scripts.append(scr)
+        return scripts
 
-		return scripts
+    def get_hostscripts( self ):
 
-	def get_service( self, protocol, port ):
-		'''return a Service object'''
+        scripts = [ ]
+        for hostscript_node in self.host_node.getElementsByTagName('hostscript'):
+            for script_node in hostscript_node.getElementsByTagName('script'):
+                scr = Script.Script(script_node)
+                scripts.append(scr)
 
-		for port_node in self.host_node.getElementsByTagName('port'):
-			if port_node.getAttribute('protocol') == protocol and port_node.getAttribute('portid') == port:
-				if (len(port_node.getElementsByTagName('service'))) > 0:
-					service_node = port_node.getElementsByTagName('service')[0]
-					service = Service.Service( service_node )
-					return service
-		return None
+        return scripts
+
+    def get_service( self, protocol, port ):
+        '''return a Service object'''
+
+        for port_node in self.host_node.getElementsByTagName('port'):
+            if port_node.getAttribute('protocol') == protocol and port_node.getAttribute('portid') == port:
+                if (len(port_node.getElementsByTagName('service'))) > 0:
+                    service_node = port_node.getElementsByTagName('service')[0]
+                    service = Service.Service( service_node )
+                    return service
+        return None
 
 if __name__ == '__main__':
 
