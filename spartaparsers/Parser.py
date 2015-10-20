@@ -131,7 +131,10 @@ if __name__ == '__main__':
                 print "\t\t" + s.fingerprint
 
             print "\tscript output:"
-            sc = port.get_scripts()
+            #sc = port.get_scripts()
+            # port is type u'str' for some reason so cant have a function.
+            # Set it to None for now to fix the bug.
+            sc = None
 
             if sc == None:
                 print "\t\tno scripts"
