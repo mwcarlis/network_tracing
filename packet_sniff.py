@@ -13,16 +13,192 @@ import threading
 import Queue
 
 
-PACKET_ELEMS = (
+TCP_ELEMS = (
     'version', 'ip_header_length', 'ttl',
     'protocol', 'src_address', 'dest_address',
     'src_port', 'dest_port', 'sequence_number',
     'ack', 'tcp_header_length'
 )
-PACKET = namedtuple('packet', PACKET_ELEMS)
+
+UDP_ELEMS = (
+    'version', 'ip_header_length', 'ttl',
+    'protocol', 'src_address', 'dest_address',
+    'src_port', 'dest_port', 'length',
+    'checksum'
+)
+
+ICMP_ELEMS = (
+    'version', 'ip_header_length', 'ttl',
+    'protocol', 'src_address', 'dest_address',
+    'type', 'code', 'checksum'
+)
+
+TCP_PACKET = namedtuple('tcp_packet', TCP_ELEMS)
+UDP_PACKET = namedtuple('udp_packet', UDP_ELEMS)
+ICMP_PACKET = namedtuple('icmp_packet', ICMP_ELEMS)
 
 
-def receive_packet(sock):
+# Networkin Protocol Numbers
+ICMP_PROTO = 1
+TCP_PROTO = 6
+ETH_PROTO = 8
+UDP_PROTO = 17
+
+def eth_addr (a) :
+  b = "%.2x:%.2x:%.2x:" % (ord(a[0]), ord(a[1]), ord(a[2]))
+  b += "%.2x:%.2x:%.2x" % (ord(a[3]), ord(a[4]), ord(a[5]))
+  return b
+
+def receive_raw_packet(sock):
+    #Convert a string of 6 characters of ethernet address into a dash separated hex string
+    #create a AF_PACKET type raw socket (thats basically packet level)
+    #define ETH_P_ALL    0x0003          /* Every packet (be careful!!!) */
+    # try:
+    #     s = socket.socket( socket.AF_PACKET , socket.SOCK_RAW , socket.ntohs(0x0003))
+    # except socket.error , msg:
+    #     print 'Socket could not be created. Error Code : ' + str(msg[0]) + ' Message ' + msg[1]
+    #     sys.exit()
+
+    packet = sock.recvfrom(65565)
+
+    #packet string from tuple
+    packet = packet[0]
+
+    #parse ethernet header
+    eth_length = 14
+
+    eth_header = packet[:eth_length]
+    eth = unpack('!6s6sH' , eth_header)
+    eth_protocol = socket.ntohs(eth[2])
+    # print 'Destination MAC : ' + eth_addr(packet[0:6]),
+    # print ' Source MAC : ' + eth_addr(packet[6:12]) + ' Protocol : ' + str(eth_protocol)
+    # print ' Protocol : ' + str(eth_protocol)
+
+    #Parse IP packets, IP Protocol number = 8
+    if eth_protocol == ETH_PROTO:
+        #Parse IP header
+        #take first 20 characters for the ip header
+        ip_header = packet[eth_length:20+eth_length]
+
+        #now unpack them :)
+        iph = unpack('!BBHHHBBH4s4s' , ip_header)
+
+        version_ihl = iph[0]
+        version = version_ihl >> 4
+        ihl = version_ihl & 0xF
+
+        iph_length = ihl * 4
+
+        ttl = iph[5]
+        protocol = iph[6]
+        s_addr = socket.inet_ntoa(iph[8]);
+        d_addr = socket.inet_ntoa(iph[9]);
+
+        # print 'Version : ' + str(version) + ' IP Header Length : ' + str(ihl),
+        # print ' TTL : ' + str(ttl) + ' Protocol : ' + str(protocol),
+        # print ' Source Address : ' + str(s_addr) + ' Destination Address : ' + str(d_addr)
+
+        #TCP protocol
+        if protocol == TCP_PROTO:
+            t = iph_length + eth_length
+            tcp_header = packet[t:t+20]
+
+            #now unpack them :)
+            tcph = unpack('!HHLLBBHHH' , tcp_header)
+
+            source_port = tcph[0]
+            dest_port = tcph[1]
+            sequence = tcph[2]
+            acknowledgement = tcph[3]
+            doff_reserved = tcph[4]
+            tcph_length = doff_reserved >> 4
+
+            # print 'Source Port : ' + str(source_port) + ' Dest Port : ',
+            # print str(dest_port) + ' Sequence Number : ' + str(sequence),
+            # print ' Acknowledgement : ' + str(acknowledgement),
+            # print ' TCP header length : ' + str(tcph_length)
+            ret_v = TCP_PACKET(
+                            version, ihl, ttl,
+                            protocol, s_addr, d_addr,
+                            source_port, dest_port, sequence,
+                            acknowledgement, tcph_length)
+
+            # h_size = eth_length + iph_length + tcph_length * 4
+            # data_size = len(packet) - h_size
+
+            # #get data from the packet
+            # data = packet[h_size:]
+
+            # print 'Data : ' + data
+
+        #ICMP Packets
+        elif protocol == ICMP_PROTO:
+            u = iph_length + eth_length
+            icmph_length = 4
+            icmp_header = packet[u:u+4]
+
+            #now unpack them :)
+            icmph = unpack('!BBH' , icmp_header)
+
+            icmp_type = icmph[0]
+            code = icmph[1]
+            checksum = icmph[2]
+
+            # print 'Type : ' + str(icmp_type) + ' Code : ' + str(code) + ' Checksum : ' + str(checksum)
+            ret_v = ICMP_PACKET(
+                version, ihl, ttl,
+                protocol, s_addr, d_addr,
+                icmp_type, code, checksum
+            )
+
+            # h_size = eth_length + iph_length + icmph_length
+            # data_size = len(packet) - h_size
+
+            # #get data from the packet
+            # data = packet[h_size:]
+
+            # print 'Data : ' + data
+
+        #UDP packets
+        elif protocol == UDP_PROTO:
+            u = iph_length + eth_length
+            udph_length = 8
+            udp_header = packet[u:u+8]
+
+            #now unpack them :)
+            udph = unpack('!HHHH' , udp_header)
+
+            source_port = udph[0]
+            dest_port = udph[1]
+            length = udph[2]
+            checksum = udph[3]
+
+            # print 'Source Port : ' + str(source_port) + ' Dest Port : ',
+            # print str(dest_port) + ' Length : ' + str(length) + ' Checksum : ' + str(checksum)
+            ret_v = UDP_PACKET(
+                version, ihl, ttl,
+                protocol, s_addr, d_addr,
+                source_port, dest_port, length,
+                checksum
+            )
+
+            # h_size = eth_length + iph_length + udph_length
+            # data_size = len(packet) - h_size
+
+            # #get data from the packet
+            # data = packet[h_size:]
+
+            # print 'Data : ' + data
+
+        #some other IP packet like IGMP
+        else :
+            print 'Protocol other than TCP/UDP/ICMP'
+            return None
+    else:
+        return None
+    return ret_v
+
+def receive_tcp_packet(sock):
     """A function to receive a packet.
     """
     packet = sock.recvfrom(65565)
@@ -62,7 +238,7 @@ def receive_packet(sock):
     # data = packet[h_size:]
 
     # Pack up the packet details.
-    pkt_obj = PACKET(version=pkt_version,
+    pkt_obj = TCP_PACKET(version=pkt_version,
                      ip_header_length=ihl,
                      ttl=ttl_num,
                      protocol=protocol_type,
@@ -100,7 +276,7 @@ class PacketSniffer(threading.Thread):
     def run(self):
         self.connect()
         while self.alive.isSet():
-            pkt_obj = receive_packet(self.sock)
+            pkt_obj = receive_tcp_packet(self.sock)
             # Send the packet details upstream.
             self.shared_queue.put(pkt_obj)
 
@@ -133,9 +309,9 @@ def test_packet_sniffer(max_packets=100):
         except Queue.Empty:
             break
         counter += 1
-    print 'TEST SNIFFER COMPLETE'
+    print 'TEST SNIFFER COMPLETE\n\n'
 
-def test_receive_packet(max_packets=100):
+def test_receive_tcp_packet(max_packets=100):
     """Receive a number (max_packets) of packets as a test and print to stout.
     """
     try:
@@ -149,14 +325,38 @@ def test_receive_packet(max_packets=100):
     counter = 0
     while counter < max_packets:
         # receive a packet
-        pkt_obj = receive_packet(sock)
+        pkt_obj = receive_tcp_packet(sock)
         print '{}: {}\n'.format(counter, pkt_obj.__repr__())
         counter += 1
-    print 'TEST RECEIVE COMPLETE'
+    print 'TEST RECEIVE COMPLETE\n\n'
+
+def test_receive_raw_packet(max_packets=100):
+    """
+    """
+    try:
+        sock = socket.socket( socket.AF_PACKET , socket.SOCK_RAW , socket.ntohs(0x0003))
+    except socket.error , msg:
+        print 'Socket could not be created. Error Code : ' + str(msg[0]) + ' Message ' + msg[1]
+        sys.exit()
+    counter = 0
+    while counter < max_packets:
+        # receive a packet
+        pkt_obj = receive_raw_packet(sock)
+        if pkt_obj and pkt_obj.protocol == UDP_PROTO:
+            if pkt_obj.dest_port == 53:
+                # Host name lookup
+                print pkt_obj
+                counter += 1
+    print 'TEST RECEIVE RAW COMPLETE\n\n'
 
 
 if __name__ == '__main__':
-    test_receive_packet()
+    import time
+
+    test_receive_raw_packet()
+    time.sleep(5)
+    test_receive_tcp_packet()
+    time.sleep(5)
     test_packet_sniffer()
 
 
