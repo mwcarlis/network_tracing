@@ -2,6 +2,8 @@
 from collections import namedtuple
 import subprocess
 import re
+import threading
+import Queue
 
 Header = namedtuple('header', ['dest', 'dest_ip', 'max_hops', 'packet_Blen'])
 Hop = namedtuple('HOST', ['hostname', 'ip'])
@@ -26,7 +28,7 @@ class IpGetter(object):
             pass
 
 
-class TraceRoute(object):
+class TraceRoute(threading.Thread):
     PROGRAM = '/usr/bin/traceroute'
     # An IP Address '(192.151.15.15)' Exclude the -> ()
     IP_RE = r'\(([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\)'
@@ -37,11 +39,15 @@ class TraceRoute(object):
 
     # A Delay time regular expression.  ####.###
     DELAY_RE = r'([0-9]{1,4}\.[0-9]{1,3}$)'
-    def __init__(self, ip):
+    def __init__(self, ip, shared_queue=None):
+        super(TraceRoute, self).__init__()
         self.destination_ip = ip
+        if isinstance(shared_queue, Queue.Queue):
+            self.shared_queue = shared_queue
+        else:
+            self.shared_queue = Queue.Queue()
         self.trace_map = {}
-        self._run_trace()
-        self._build_table()
+        self.start()
 
     def _run_trace(self):
         trace = subprocess.check_output([self.PROGRAM, self.destination_ip])
@@ -55,6 +61,14 @@ class TraceRoute(object):
             table.append(row)
         self.trace_map = self._parser(table)
 
+    def run(self):
+        self._run_trace()
+        self._build_table()
+        self.shared_queue.put(self.trace_map)
+
+    def completed(self):
+        return self.finished
+
     def __iter__(self):
         for key in sorted(self.trace_map.keys()):
             if key == 0:
@@ -63,6 +77,9 @@ class TraceRoute(object):
 
     def __getitem__(self, key):
         return self.trace_map[key]
+
+    def get_queue(self):
+        return self.shared_queue
 
 
     def _parser(self, table):
@@ -169,8 +186,9 @@ class whois(object):
 def test_trace_route(domain='www.google.com'):
     """Test the trace route object on domain.
     """
-    trc = TraceRoute(domain)
-    print trc.trace_map
+    queue = Queue.Queue()
+    trc = TraceRoute(domain, queue)
+    print queue.get(block=True, timeout=30)
 
 if __name__ == '__main__':
     test_trace_route()
