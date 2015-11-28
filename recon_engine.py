@@ -45,28 +45,36 @@ class ReconProtocol(object):
     def parse_client(self, message=''):
         items = message.split('-')
         if 'cm.echo' in items:
-            reply = 'cm.print-{}'.format(items[-1:])
+            reply = 'cm.print-{}'.format(items[-1])
             self.iface.sendall(reply)
+            return self.iface
         elif 'cm.print' in items:
             print message
+            return self.iface
         elif 'cm.stop' in items:
             self.iface.close()
             self.iface = None
+            return None
 
     def parse_server(self, message=''):
         items = message.split('-')
         if 'cm.echo' in items:
-            reply = 'cm.print-{}'.format(items[-1:])
+            reply = 'cm.print-{}'.format(items[-1])
             self.iface.sendall(reply)
+            return self.iface
         elif 'cm.print' in items:
             print message
-            reply = 'cm.stop-{}'.format(items[-1:])
+            reply = 'cm.stop-{}'.format(items[-1])
             self.iface.sendall(reply)
+            self.iface.close()
+            self.iface = None
+            return None
         elif 'cm.stop' in items:
             reply = 'cm.stop-dummy'
             self.iface.sendall(reply)
             self.iface.close()
             self.iface = None
+            return None
 
 
 class ReconClient(object):
@@ -125,7 +133,7 @@ class ReconServer(threading.Thread):
                     self.connection, self.client_address = self.sock.accept()
                     self.protocol.new_iface(self.connection)
                 command = self.connection.recv(MAX_MSG)
-                self.protocol.parse_cmd(command)
+                self.connection = self.protocol.parse_cmd(command)
         except:
             raise
             #self.connection.close()
