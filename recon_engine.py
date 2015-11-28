@@ -95,10 +95,12 @@ class ReconClient(object):
         if len(message) > MAX_MSG:
             errmsg = 'message too large: msg-{} > MAX-{}'
             raise Exception(errmsg).format(len(message), MAX_MSG)
+        if self.sock is None:
+            self.connect()
         # Send a message.
         self.sock.sendall(message)
         # Receive a response and parse it.
-        self.protocol.parse_cmd(self.sock.recv(MAX_MSG))
+        self.sock = self.protocol.parse_cmd(self.sock.recv(MAX_MSG))
 
 class ReconServer(threading.Thread):
     def __init__(self, shared_queue=None):
@@ -116,6 +118,7 @@ class ReconServer(threading.Thread):
     def connect(self):
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
             sock.bind(LOCALHOST)
             sock.listen(1)
         except socket.error, msg:
@@ -128,12 +131,15 @@ class ReconServer(threading.Thread):
         try:
             self.connect()
             while self.alive.isSet():
-                if self.connection is None:
-                    print 'blocking connect'
-                    self.connection, self.client_address = self.sock.accept()
-                    self.protocol.new_iface(self.connection)
-                command = self.connection.recv(MAX_MSG)
-                self.connection = self.protocol.parse_cmd(command)
+                try:
+                    if self.connection is None:
+                        self.connection, self.client_address = self.sock.accept()
+                        self.protocol.new_iface(self.connection)
+                    command = self.connection.recv(MAX_MSG)
+                    self.connection = self.protocol.parse_cmd(command)
+                except socket.timeout:
+                    # heartbeat to end the thread.
+                    pass
         except:
             raise
             #self.connection.close()
@@ -144,6 +150,7 @@ class ReconEngine():
         self.tracerotue_queue = Queue.Queue()
         self.dns_queue = Queue.Queue()
         self.dnsr = DNSResolver(shared_queue=self.dns_queue)
+        self.rcs = ReconServer()
 
 
     def traceroute(self, ip):
