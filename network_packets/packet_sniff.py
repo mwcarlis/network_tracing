@@ -9,6 +9,7 @@ import socket, sys
 from struct import *
 from collections import namedtuple
 
+
 import threading
 import Queue
 
@@ -24,7 +25,7 @@ UDP_ELEMS = (
     'version', 'ip_header_length', 'ttl',
     'protocol', 'src_address', 'dest_address',
     'src_port', 'dest_port', 'length',
-    'checksum'
+    'checksum', 'data'
 )
 
 ICMP_ELEMS = (
@@ -36,6 +37,9 @@ ICMP_ELEMS = (
 TCP_PACKET = namedtuple('tcp_packet', TCP_ELEMS)
 UDP_PACKET = namedtuple('udp_packet', UDP_ELEMS)
 ICMP_PACKET = namedtuple('icmp_packet', ICMP_ELEMS)
+
+UDP_DNS_PORT = 53
+PENDING_DNS_REQUESTS = {}
 
 
 # Networkin Protocol Numbers
@@ -53,12 +57,6 @@ def receive_raw_packet(sock):
     #Convert a string of 6 characters of ethernet address into a dash separated hex string
     #create a AF_PACKET type raw socket (thats basically packet level)
     #define ETH_P_ALL    0x0003          /* Every packet (be careful!!!) */
-    # try:
-    #     s = socket.socket( socket.AF_PACKET , socket.SOCK_RAW , socket.ntohs(0x0003))
-    # except socket.error , msg:
-    #     print 'Socket could not be created. Error Code : ' + str(msg[0]) + ' Message ' + msg[1]
-    #     sys.exit()
-
     packet = sock.recvfrom(65565)
 
     #packet string from tuple
@@ -121,7 +119,8 @@ def receive_raw_packet(sock):
                             version, ihl, ttl,
                             protocol, s_addr, d_addr,
                             source_port, dest_port, sequence,
-                            acknowledgement, tcph_length)
+                            acknowledgement, tcph_length
+            )
 
             # h_size = eth_length + iph_length + tcph_length * 4
             # data_size = len(packet) - h_size
@@ -175,18 +174,22 @@ def receive_raw_packet(sock):
 
             # print 'Source Port : ' + str(source_port) + ' Dest Port : ',
             # print str(dest_port) + ' Length : ' + str(length) + ' Checksum : ' + str(checksum)
+
+            if dest_port == UDP_DNS_PORT or dest_port in PENDING_DNS_REQUESTS:
+                # This might be a DNS packet.
+                h_size = eth_length + iph_length + udph_length
+                data_size = len(packet) - h_size
+                data = packet[h_size-2:]
+            else:
+                # This isn't a DNS packet.
+                data = None
+
             ret_v = UDP_PACKET(
                 version, ihl, ttl,
                 protocol, s_addr, d_addr,
                 source_port, dest_port, length,
-                checksum
+                checksum, data
             )
-
-            # h_size = eth_length + iph_length + udph_length
-            # data_size = len(packet) - h_size
-
-            # #get data from the packet
-            # data = packet[h_size:]
 
             # print 'Data : ' + data
 
@@ -238,18 +241,45 @@ def receive_tcp_packet(sock):
     # data = packet[h_size:]
 
     # Pack up the packet details.
-    pkt_obj = TCP_PACKET(version=pkt_version,
-                     ip_header_length=ihl,
-                     ttl=ttl_num,
-                     protocol=protocol_type,
-                     src_address=s_addr,
-                     dest_address=d_addr,
-                     src_port=source_port_num,
-                     dest_port=dest_port_num,
-                     sequence_number=sequence,
-                     ack=acknowledgement,
-                     tcp_header_length=tcph_length)
+    pkt_obj = TCP_PACKET(
+        version=pkt_version,
+         ip_header_length=ihl,
+         ttl=ttl_num,
+         protocol=protocol_type,
+         src_address=s_addr,
+         dest_address=d_addr,
+         src_port=source_port_num,
+         dest_port=dest_port_num,
+         sequence_number=sequence,
+         ack=acknowledgement,
+         tcp_header_length=tcph_length
+    )
     return pkt_obj
+
+class DNSParser(threading.Thread):
+
+    def __init__(self, shared_queue=None):
+        super(DNSParser, self).__init__()
+
+        if isinstance(shared_queue, Queue.Queue):
+            self.shared_queue = shared_queue
+        else:
+            self.shared_queue = Queue.Queue()
+        self.alive = threading.Event()
+        self.alive.set()
+        self.start()
+
+    def run(self):
+        while self.alive.isSet():
+            try:
+                # Block for 1/10th of a second to service self.alive.isSet()
+                udp_packet = self.shared_queue.get(timeout=0.1)
+            except Queue.Empty:
+                pass
+
+    def get_queue(self):
+        return self.shared_queue
+
 
 class PacketSniffer(threading.Thread):
     """A Packet Sniffing object with threading.
@@ -333,30 +363,47 @@ def test_receive_tcp_packet(max_packets=100):
 def test_receive_raw_packet(max_packets=100):
     """
     """
+    from prettyprint import pp
+    global PENDING_DNS_REQUESTS
     try:
         sock = socket.socket( socket.AF_PACKET , socket.SOCK_RAW , socket.ntohs(0x0003))
     except socket.error , msg:
         print 'Socket could not be created. Error Code : ' + str(msg[0]) + ' Message ' + msg[1]
         sys.exit()
+    pkt_seen = {}
     counter = 0
     while counter < max_packets:
         # receive a packet
         pkt_obj = receive_raw_packet(sock)
         if pkt_obj and pkt_obj.protocol == UDP_PROTO:
-            if pkt_obj.dest_port == 53:
+            if pkt_obj.data:
                 # Host name lookup
-                print pkt_obj
+                # This is a sen't packet.
+                if pkt_obj.data[:2].__repr__() not in pkt_seen:
+                    print 's', pkt_obj.data[2:].__repr__()
+                    pkt_seen[pkt_obj.data[:2].__repr__()] = True
+                    PENDING_DNS_REQUESTS[pkt_obj.src_port] = pkt_obj.data[:2].__repr__()
+                if pkt_obj.dest_port in PENDING_DNS_REQUESTS:
+                    print 'd', pkt_obj.data[10:]
                 counter += 1
+
+    pp (pkt_seen)
+    pp(PENDING_DNS_REQUESTS)
     print 'TEST RECEIVE RAW COMPLETE\n\n'
 
 
 if __name__ == '__main__':
     import time
+    import os, sys
+    if not os.geteuid() == 0:
+        sys.exit("\nOnly a root user can run this\n")
 
+    #dnsp = DNSParser()
     test_receive_raw_packet()
-    time.sleep(5)
-    test_receive_tcp_packet()
-    time.sleep(5)
-    test_packet_sniffer()
+    #dnsp.alive.clear()
+    # time.sleep(5)
+    # test_receive_tcp_packet()
+    # time.sleep(5)
+    # test_packet_sniffer()
 
 

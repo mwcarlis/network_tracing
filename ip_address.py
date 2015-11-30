@@ -6,19 +6,14 @@ import pygeoip
 wget_addr = 'http://geolite.maxmind.com/download/geoip/database/GeoLiteCity.dat.gz'
 
 class IPAddress(object):
-    def __init__(self, ip='', hostname=''):
-        if not (ip or hostname):
-            raise Exception('Must specify ip or hostname')
-        self.ip = ip
-        self.hostname = hostname
-        self.record = {}
-
-    def approx_geograph(self):
+    def __init__(self):
         pyg = pygeoip.GeoIp('./geoip_databases/GeoLiteCity.dat')
+
+    def approx_geograph(self, ip='', hostname=''):
         if self.ip:
-            self.record = pyg.record_by_addr(self.ip)
+            return self.pyg.record_by_addr(self.ip)
         elif self.hostname:
-            self.record = pyg.record_by_name(self.hostname)
+            return self.pyg.record_by_name(self.hostname)
         else:
             raise Exception('Undefined error')
 
