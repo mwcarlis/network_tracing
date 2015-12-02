@@ -5,6 +5,7 @@ import re
 import threading
 import Queue
 
+
 Header = namedtuple('header', ['dest', 'dest_ip', 'max_hops', 'packet_Blen'])
 Hop = namedtuple('HOST', ['hostname', 'ip'])
 Delay = namedtuple('delay', ['delay', 'unit'])
@@ -47,6 +48,7 @@ class TraceRoute(threading.Thread):
         else:
             self.shared_queue = Queue.Queue()
         self.trace_map = {}
+        self.alive = True
         self.start()
 
     def _run_trace(self):
@@ -62,9 +64,14 @@ class TraceRoute(threading.Thread):
         self.trace_map = self._parser(table)
 
     def run(self):
-        self._run_trace()
-        self._build_table()
-        self.shared_queue.put(self.trace_map)
+        try:
+            self._run_trace()
+            self._build_table()
+            self.shared_queue.put(self.trace_map)
+        except:
+            raise
+        finally:
+            self.alive = False
 
     def completed(self):
         return self.finished
@@ -171,7 +178,9 @@ class TraceRoute(threading.Thread):
                     state = ERROR_S
                 else:
                     print trace_globs
-                    raise Exception('Undefined state {}'.format(cnt))
+                    print '\n\n', row
+                    msg = 'Undefined state {} {}'
+                    raise Exception(msg.format(self.destination_ip, cnt))
             # Go to the next row.  Make this row first.
             if count + 1 not in trace_globs:
                 trace_globs[count+1] = tuple(row_glob)
@@ -188,8 +197,9 @@ def test_trace_route(domain='www.google.com'):
     """
     queue = Queue.Queue()
     trc = TraceRoute(domain, queue)
-    print queue.get(block=True, timeout=30)
+    return queue.get(block=True, timeout=30)
 
 if __name__ == '__main__':
-    test_trace_route()
+    import prettyprint
+    prettyprint.pp(test_trace_route())
 
