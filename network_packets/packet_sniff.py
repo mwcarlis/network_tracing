@@ -13,7 +13,6 @@ from collections import namedtuple
 import threading
 import Queue
 
-
 TCP_ELEMS = (
     'version', 'ip_header_length', 'ttl',
     'protocol', 'src_address', 'dest_address',
@@ -375,20 +374,22 @@ def test_receive_raw_packet(max_packets=100):
     while counter < max_packets:
         # receive a packet
         pkt_obj = receive_raw_packet(sock)
-        if pkt_obj and pkt_obj.protocol == UDP_PROTO:
-            if pkt_obj.data:
-                # Host name lookup
-                # This is a sen't packet.
-                if pkt_obj.data[:2].__repr__() not in pkt_seen:
-                    print 's', pkt_obj.data[2:].__repr__()
-                    pkt_seen[pkt_obj.data[:2].__repr__()] = True
-                    PENDING_DNS_REQUESTS[pkt_obj.src_port] = pkt_obj.data[:2].__repr__()
-                if pkt_obj.dest_port in PENDING_DNS_REQUESTS:
-                    print 'd', pkt_obj.data[10:]
-                counter += 1
+        print pkt_obj
+        # if pkt_obj and pkt_obj.protocol == UDP_PROTO:
+        #     if pkt_obj.data:
+        #         # Host name lookup
+        #         # This is a sen't packet.
+        #         if pkt_obj.data[:2].__repr__() not in pkt_seen:
+        #             print 's', pkt_obj.data[2:].__repr__()
+        #             pkt_seen[pkt_obj.data[:2].__repr__()] = True
+        #             PENDING_DNS_REQUESTS[pkt_obj.src_port] = pkt_obj.data[:2].__repr__()
+        #         if pkt_obj.dest_port in PENDING_DNS_REQUESTS:
+        #             print 'd', pkt_obj.data[10:]
+        #        counter += 1
+        counter += 1
 
-    pp (pkt_seen)
-    pp(PENDING_DNS_REQUESTS)
+    # pp (pkt_seen)
+    # pp(PENDING_DNS_REQUESTS)
     print 'TEST RECEIVE RAW COMPLETE\n\n'
 
 
@@ -402,8 +403,8 @@ if __name__ == '__main__':
     test_receive_raw_packet()
     #dnsp.alive.clear()
     # time.sleep(5)
-    # test_receive_tcp_packet()
+    test_receive_tcp_packet()
     # time.sleep(5)
-    # test_packet_sniffer()
+    test_packet_sniffer()
 
 
