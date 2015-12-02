@@ -1,14 +1,14 @@
 """A Recon-Engine for Penetration Testing.
 """
 
+import time
 import threading
 import socket
 import Queue
-
 from region_trace import TraceRoute
 from network_packets.dns_parser import DNSResolver
 from ip_address import IPAddress
-
+from port_scan import PortScanner
 
 LOCALHOST = ('localhost', 5555)
 MAX_MSG = 1024
@@ -142,19 +142,136 @@ class ReconServer(threading.Thread):
                     pass
         except:
             raise
-            #self.connection.close()
+        finally:
+            try:
+                self.connection.close()
+            except:
+                pass
+            try:
+                self.sock.close()
+            except:
+                pass
 
-class ReconEngine():
+class ReconEngine(threading.Thread):
 
     def __init__(self):
-        self.tracerotue_queue = Queue.Queue()
+        super(ReconEngine, self).__init__()
+        self.tracert_queue = Queue.Queue()
         self.dns_queue = Queue.Queue()
+        self.port_queue = Queue.Queue()
+
         self.dnsr = DNSResolver(shared_queue=self.dns_queue)
         self.rcs = ReconServer()
+        self.ipa = IPAddress()
 
+        self.portscans = []
+        self.traceroutes = []
+
+        self.alive = threading.Event()
+        self.alive.set()
+        self.start()
+
+    def _clean_oneshot_threads(self, pool):
+        dead_threads = []
+        for th in pool:
+            if not th.alive:
+                # Get the dead scans
+                dead_threads.append(th)
+        for th in dead_threads:
+            # Remove the dead scans
+            index = pool.index(th)
+            pool.pop(index)
+
+    def manage_portscans(self):
+        self._clean_oneshot_threads(self.portscans)
+
+    def manage_traceroutes(self):
+        self._clean_oneshot_threads(self.traceroutes)
 
     def traceroute(self, ip):
-        TraceRoute(ip, shared_queue=self.traceroute_queue)
+        if len(self.traceroutes) <= 15:
+            troute = TraceRoute(ip, shared_queue=self.tracert_queue)
+            self.traceroutes.append(troute)
+            return True
+        return False
+
+    def portscan(self, ip):
+        if len(self.portscans) <= 15:
+            pscan = PortScanner(ip, self.port_queue)
+            self.portscans.append(pscan)
+            return True
+        return False
+
+
+    def run(self):
+        start = time.time()
+        records = {}
+        inquiry_queue = []
+        tracert_qq = []
+        portscan_qq = []
+        fip = None
+        try:
+            while self.alive.isSet():
+                try:
+                    dns_record = self.dns_queue.get(block=False, timeout=3)
+
+                    fip = sorted(dns_record['ips'])[0]
+                    if fip not in records:
+                        records[fip] = dns_record
+                        tracert_qq.append(fip)
+                        portscan_qq.append(fip)
+                    # Do a record lookup on it.
+                    print '\n\ndns_record'
+                    print dns_record
+
+                except Queue.Empty:
+                    pass
+
+                try:
+
+                    if len(tracert_qq) > 0 and self.traceroute(tracert_qq[0]):
+                        tracert_qq.pop(0)
+
+                    tracert_record = self.tracert_queue.get(block=False, timeout=3)
+                    print '\n\ntracert record'
+                    print tracert_record
+                    # Remove the dead thread here from traceroutes
+                    self.manage_traceroutes()
+                except Queue.Empty:
+                    pass
+
+                try:
+                    if len(portscan_qq) > 0 and self.portscan(portscan_qq[0]):
+                        portscan_qq.pop(0)
+
+                    port_record = self.port_queue.get(block=False, timeout=3)
+                    print '\n\nport record'
+                    print port_record
+                    # Remove the dead thread here from portscans
+                    self.manage_traceroutes()
+                except Queue.Empty:
+                    pass
+
+                delta = time.time()
+                if 5.0 <= (delta - start):
+                    print 'heartbeat'
+                    start = delta
+        except:
+            raise
+        finally:
+            self.dnsr.alive.clear()
+            self.rcs.alive.clear()
+
+
+if __name__ == "__main__":
+    import time
+    import os, sys
+    if not os.geteuid() == 0:
+        sys.exit("\nOnly a root user can run this\n")
+
+    rc = ReconEngine()
+    time.sleep(60)
+    rc.alive.clear()
 
 
 
