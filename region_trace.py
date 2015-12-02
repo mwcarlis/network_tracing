@@ -32,18 +32,16 @@ class IpGetter(object):
 class TraceRoute(threading.Thread):
     PROGRAM = '/usr/bin/traceroute'
     # An IP Address '(192.151.15.15)' Exclude the -> ()
-    # IP_RE = r'\(([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\)'
     IP_RE = r'^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$'
     TR_IP_RE = r'^\((([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\)$'
 
     # A Hostname website.com or my.website.com .. etc
     #   at least two words with a period seperation with numbers.
-    # HOSTNAME_RE = r'(([a-z0-9\-]*\.)+[a-zA-Z0-9]+)'
     HOSTNAME_RE = r'^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]*[A-Za-z0-9])$'
 
-
     # A Delay time regular expression.  ####.###
-    DELAY_RE = r'([0-9]{1,4}\.[0-9]{1,3}$)'
+    DELAY_RE = r'^([0-9]{1,4}\.[0-9]{1,3})$'
+
     def __init__(self, ip, shared_queue=None):
         super(TraceRoute, self).__init__()
         self.destination_ip = ip
@@ -93,22 +91,22 @@ class TraceRoute(threading.Thread):
         return self.shared_queue
 
     # TR_IP_RE
-    # HOSTNAME_RE =
-    # DELAY_RE = r'([0-9]{1,4}\.[0-9]{1,3}$)'
+    # HOSTNAME_RE
+    # DELAY_RE
 
     def _parser(self, table):
         """A traceroute STDOUT parser.
         """
         IP_HOST_S = 0
         DELAY_S = 1
-        DELAY_UNIT = 2
+        DELAY_UNIT_S = 2
 
         milisec = 'ms'
         # Header = namedtuple('header', ['dest', 'dest_ip', 'max_hops', 'packet_Blen'])
         h_row= table[0]
         header = Header(h_row[2], h_row[3].strip('(),'), int(h_row[4]), int(h_row[7]))
         trace_globs = { 0: header}
-        this_ip = None
+        valid = False
         for count, row in enumerate(table[1:]):
             delays = []
             state = IP_HOST_S
@@ -120,9 +118,11 @@ class TraceRoute(threading.Thread):
                     # HOSTNAME is a superset of IP_RE
                     host = item
 
-                    if this_ip and len(delays) > 0:
+                    if valid and len(delays) > 0:
                         Host(hostname=host, ip=this_ip, delays=tuple(delays), delay_unit='ms')
+
                     delays = []
+                    valid = False
                     state = IP_HOST_S
                     continue
                 elif re.match(self.TR_IP_RE, item):
@@ -133,11 +133,12 @@ class TraceRoute(threading.Thread):
                     continue
                 elif state == DELAY_S and re.match(self.DELAY_RE, item):
                     # Get the Delay number
-                    state = DELAY_UNIT
+                    state = DELAY_UNIT_S
                     delays.append(item)
                     continue
-                elif state == DELAY_UNIT and 'ms' in item:
+                elif state == DELAY_UNIT_S and 'ms' in item:
                     state = DELAY_S
+                    valid = True
                     continue
                 else:
                     pass
