@@ -9,6 +9,7 @@ from region_trace import TraceRoute
 from network_packets.dns_parser import DNSResolver
 from ip_address import IPAddress
 from port_scan import PortScanner
+import prettyprint
 
 LOCALHOST = ('localhost', 5555)
 MAX_MSG = 1024
@@ -221,8 +222,8 @@ class ReconEngine(threading.Thread):
                         tracert_qq.append(fip)
                         portscan_qq.append(fip)
                     # Do a record lookup on it.
-                    print '\n\ndns_record'
-                    print dns_record
+                    # print '\n\ndns_record'
+                    # print dns_record
 
                 except Queue.Empty:
                     pass
@@ -234,7 +235,8 @@ class ReconEngine(threading.Thread):
 
                     tracert_record = self.tracert_queue.get(block=False, timeout=3)
                     print '\n\ntracert record'
-                    print tracert_record
+                    for key in tracert_record:
+                        print key, tracert_record[key]
                     # Remove the dead thread here from traceroutes
                     self.manage_traceroutes()
                 except Queue.Empty:
@@ -246,7 +248,7 @@ class ReconEngine(threading.Thread):
 
                     port_record = self.port_queue.get(block=False, timeout=3)
                     print '\n\nport record'
-                    print port_record
+                    prettyprint.pp( port_record )
                     # Remove the dead thread here from portscans
                     self.manage_traceroutes()
                 except Queue.Empty:
