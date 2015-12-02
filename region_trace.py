@@ -90,10 +90,6 @@ class TraceRoute(threading.Thread):
     def get_queue(self):
         return self.shared_queue
 
-    # TR_IP_RE
-    # HOSTNAME_RE
-    # DELAY_RE
-
     def _parser(self, table):
         """A traceroute STDOUT parser.
         """
@@ -111,11 +107,14 @@ class TraceRoute(threading.Thread):
         )
         trace_globs = { 0: header}
         valid = False
+        delays = []
         for count, row in enumerate(table[1:]):
-            delays = []
             state = IP_HOST_S
-            for cnt, item in enumerate(row[1:]):
-                if '*' in item:
+            terminated_row = row + ['terminal']
+            hops = []
+            for cnt, item in enumerate(terminated_row[1:]):
+                if 'terminal' == item:
+                    # This is a terminal indicator.
                     if valid:
                         t_host = Host(
                             hostname=host,
@@ -123,26 +122,34 @@ class TraceRoute(threading.Thread):
                             delays=tuple(delays),
                             delay_unit='ms'
                         )
-                        print '\n* pack :', t_host
+                        hops.append(t_host)
                         valid = False
+                        delays = []
+                    continue
+                elif '*' == item:
+                    # A hop ignored us.
                     continue
 
                 if state == DELAY_S and re.match(self.DELAY_RE, item):
                     # Get the Delay number
-                    print 'd-{},'.format(item),
                     state = DELAY_UNIT_S
                     delays.append(item)
                     continue
                 elif state == DELAY_UNIT_S and 'ms' == item:
-                    print 'u-{}'.format(item),
+                    # Get the Delay units
                     state = DELAY_S
                     valid = True
                     continue
-                elif re.match(self.HOSTNAME_RE, item):
-                    # HOSTNAME is a superset of IP_RE
-                    print '\nh-{},'.format(item),
-                    host = item
+                elif re.match(self.TR_IP_RE, item):
+                    # (IP) is a subset of HOSTNAME_RE
+                    this_ip = item.strip('()')
 
+                    state = DELAY_S
+                    continue
+                # cnt == 0 and count == 0: Some gateways invalid hostnames, but
+                # I still wan't to catch this hop.
+                elif (cnt == 0 and count == 0) or re.match(self.HOSTNAME_RE, item):
+                    # HOSTNAME is a superset of IP_RE
                     if valid and len(delays) > 0:
                         t_host = Host(
                             hostname=host,
@@ -150,29 +157,24 @@ class TraceRoute(threading.Thread):
                             delays=tuple(delays),
                             delay_unit='ms'
                         )
-                        print '\nhost:', t_host
+                        hops.append(t_host)
 
+                    host = item
                     delays = []
                     valid = False
                     state = IP_HOST_S
                     continue
-                elif re.match(self.TR_IP_RE, item):
-                    # (IP) is a subset of HOSTNAME_RE
-                    print 'i-{},'.format(item),
-                    this_ip = item.strip('()')
-
-                    state = DELAY_S
-                    continue
                 else:
                     msg = "Failed - Cnt: {}, row: {}, ip: {}"
-                    raise Exception(
-                        msg.format(cnt, row, self.destination_ip)
-                    )
+                    raise Exception(msg.format(cnt, row, self.destination_ip))
 
-            # Go to the next row.  Make this row first.
-            # if count + 1 not in trace_globs:
-            #     trace_globs[count+1] = tuple(row_glob)
-        return None # trace_globs
+            if len(hops) > 0:
+                # This hop told us who it was.
+                trace_globs[count+1] = tuple(hops)
+            else:
+                # This hop doesn't like traceroute.
+                trace_globs[count+1] = None
+        return trace_globs
 
 
 class whois(object):
