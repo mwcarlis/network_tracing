@@ -1,8 +1,8 @@
-import threading
-import Queue
+import re
 import shlex
 import subprocess
-import re
+import threading
+import Queue
 
 class DNSResolver(threading.Thread):
 
@@ -25,16 +25,21 @@ class DNSResolver(threading.Thread):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
         )
-        lines_iter = iter(pobj.stdout.readline, b"")
-        for line in lines_iter:
-            line = line.strip()
-            row = re.findall(r'[^\s\t]+', line)
-            if 'response' in row:
-                self.response_processor(row)
-            else:
-                self.query_processor(row)
-            if not self.alive.isSet():
-                break
+        try:
+            lines_iter = iter(pobj.stdout.readline, b"")
+            for line in lines_iter:
+                line = line.strip()
+                row = re.findall(r'[^\s\t]+', line)
+                if 'response' in row:
+                    self.response_processor(row)
+                else:
+                    self.query_processor(row)
+                if not self.alive.isSet():
+                    break
+        except:
+            raise
+        finally:
+            self.alive.clear()
 
     def query_processor(self, row):
         start = 0
@@ -63,7 +68,11 @@ class DNSResolver(threading.Thread):
                 # Everything else.
                 continue
         if valid:
+            # Rember this packet for the response.
             self.pending_requests[items['request_id']] = items
+        else:
+            # print '\n\nmalfunction\n\n'
+            pass
 
     def response_processor(self, row):
         start = 0
@@ -98,18 +107,41 @@ class DNSResolver(threading.Thread):
                 # Everything else.
                 continue
         if valid:
+            # Find the packet we remembered for the query
             if items['request_id'] in self.pending_requests:
                 request = self.pending_requests.pop(items['request_id'])
                 for domain in request['domain']:
                     items['domain'].append(domain)
                 self.shared_queue.put(items)
+        else:
+            # print '\n\n failed_dang'
+            # print items
+            pass
 
     def get_queue(self):
         return self.shared_queue
 
-if __name__ == '__main__':
-    from time import sleep
-    dnsr = DNSResolver()
-    sleep(60)
+
+def test_dns_resolver():
+    import time
+
+    qq = Queue.Queue()
+    dnsr = DNSResolver(shared_queue=qq)
+    start = time.time()
+    TIME_WAIT = 60
+    print 'gotit'
+    while ( TIME_WAIT > ( time.time() - start )):
+        print qq.get(timeout=60)
+        print '\n\ngotit'
     dnsr.alive.clear()
+    return
+
+
+if __name__ == '__main__':
+    import prettyprint
+    import os,sys
+    if not os.geteuid() == 0:
+        sys.exit("\nOnly a root user can run this\n")
+    test_dns_resolver()
+
 
