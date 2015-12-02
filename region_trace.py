@@ -7,8 +7,8 @@ import Queue
 
 
 Header = namedtuple('header', ['dest', 'dest_ip', 'max_hops', 'packet_Blen'])
-Hop = namedtuple('HOST', ['hostname', 'ip'])
-Delay = namedtuple('delay', ['delay', 'unit'])
+Host = namedtuple('HOST', ['hostname', 'ip', 'delays', 'delay_unit'])
+
 
 class IpGetter(object):
     master = None
@@ -19,11 +19,11 @@ class IpGetter(object):
     @staticmethod
     def from_trace_route(tr):
         for item in tr:
-            if isinstance(tr, Hop):
+            if isinstance(tr, Host):
                 return tr.dest_ip
 
     def __getitem__(self, key):
-        if isinstance(key, Hop):
+        if isinstance(key, Host):
             return tr.dest_ip
         if isinstance(key, TraceRoute):
             pass
@@ -32,11 +32,15 @@ class IpGetter(object):
 class TraceRoute(threading.Thread):
     PROGRAM = '/usr/bin/traceroute'
     # An IP Address '(192.151.15.15)' Exclude the -> ()
-    IP_RE = r'\(([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\)'
+    # IP_RE = r'\(([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\)'
+    IP_RE = r'^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$'
+    TR_IP_RE = r'^\((([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\)$'
 
     # A Hostname website.com or my.website.com .. etc
     #   at least two words with a period seperation with numbers.
-    HOSTNAME_RE = r'(([a-z0-9\-]*\.)+[a-zA-Z0-9]+)'
+    # HOSTNAME_RE = r'(([a-z0-9\-]*\.)+[a-zA-Z0-9]+)'
+    HOSTNAME_RE = r'^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]*[A-Za-z0-9])$'
+
 
     # A Delay time regular expression.  ####.###
     DELAY_RE = r'([0-9]{1,4}\.[0-9]{1,3}$)'
@@ -88,99 +92,59 @@ class TraceRoute(threading.Thread):
     def get_queue(self):
         return self.shared_queue
 
+    # TR_IP_RE
+    # HOSTNAME_RE =
+    # DELAY_RE = r'([0-9]{1,4}\.[0-9]{1,3}$)'
 
     def _parser(self, table):
         """A traceroute STDOUT parser.
         """
         IP_HOST_S = 0
-        IP_S      = 1
-        DELAY_S = 2
-        D_UNIT_S  = 3
-        ERROR_S   = 99
+        DELAY_S = 1
+        DELAY_UNIT = 2
 
         milisec = 'ms'
         # Header = namedtuple('header', ['dest', 'dest_ip', 'max_hops', 'packet_Blen'])
         h_row= table[0]
         header = Header(h_row[2], h_row[3].strip('(),'), int(h_row[4]), int(h_row[7]))
         trace_globs = { 0: header}
+        this_ip = None
         for count, row in enumerate(table[1:]):
-            row_glob = []
+            delays = []
             state = IP_HOST_S
-            for cnt, item in enumerate(row[1:]):
-                if item == '*':
-                    if count + 1 not in trace_globs:
-                        trace_globs[count + 1] = None
+            for cnt, item in row[1:]:
+                if '*' in item:
                     continue
-                if state == IP_HOST_S:
-                    # Parse the HOSTNAME or IP if not HOSTNAME.
-                    # IP RE doesn't match hostnames.  Test IP first.
-                    match = re.match(self.IP_RE, item)
-                    if not match:
-                        # Our hostname RE also matches IP's.  Test IP first.
-                        match = re.match(self.HOSTNAME_RE, item)
-                    if not match:
-                        # The local network has Project_Network as hostname
-                        match = re.match(r'(Project_Network)', item)
 
-                    if match:
-                        ### Next State
-                        hostname = match.groups()[0]
-                        state = IP_S
-                        continue
-                    print 'err ip host s'
-                    state = ERROR_S
-                elif state == IP_S:
-                    # Parse the IP Section.
-                    match = re.match(self.IP_RE, item)
-                    if match:
-                        ### Next state
-                        ip_addr = match.groups()[0]
-                        hop = Hop(hostname, ip_addr)
-                        row_glob.append(hop)
-                        state = DELAY_S
-                        continue
-                    print 'err ip s'
-                    state = ERROR_S
-                elif state == DELAY_S:
-                    # Parse the value of delay.
-                    match = re.match(self.DELAY_RE, item)
-                    if match:
-                        ### Next state
-                        delay = match.groups()[0]
-                        state = D_UNIT_S
-                        continue
-                    print 'err delay s'
-                    state = ERROR_S
-                elif state == D_UNIT_S:
-                    # Parse the unit of the delay.
-                    if milisec in item:
-                        time_delay = Delay(delay, milisec)
-                        row_glob.append(time_delay)
-                        # Is this the last item?
-                        if cnt + 2 < len(row):
-                            ### Next state
-                            next_item = row[cnt+2]
-                            delay_match = re.match(self.DELAY_RE, next_item)
-                            if delay_match:
-                                # Next is another delay.
-                                state = DELAY_S
-                                continue
-                            ip_match = re.match(self.IP_RE, next_item)
-                            hinfo_match = re.match(self.HOSTNAME_RE, next_item)
-                            if ip_match or hinfo_match:
-                                # Next is a host or IP. Restart.
-                                state = IP_HOST_S
-                                continue
-                        # This is terminal.
-                        continue
-                    # We encountered an error.
-                    print 'err d unit s'
-                    state = ERROR_S
+                if re.match(self.HOSTNAME_RE, item):
+                    # HOSTNAME is a superset of IP_RE
+                    host = item
+
+                    if this_ip and len(delays) > 0:
+                        Host(hostname=host, ip=this_ip, delays=tuple(delays), delay_unit='ms')
+                    delays = []
+                    state = IP_HOST_S
+                    continue
+                elif re.match(self.TR_IP_RE, item):
+                    # (IP) is a subset of HOSTNAME_RE
+                    this_ip = item.strip('()')
+
+                    state = DELAY_S
+                    continue
+                elif state == DELAY_S and re.match(self.DELAY_RE, item):
+                    # Get the Delay number
+                    state = DELAY_UNIT
+                    delays.append(item)
+                    continue
+                elif state == DELAY_UNIT and 'ms' in item:
+                    state = DELAY_S
+                    continue
                 else:
-                    print trace_globs
-                    print '\n\n', row
-                    msg = 'Undefined state {} {}'
-                    raise Exception(msg.format(self.destination_ip, cnt))
+                    pass
+
+
+
+
             # Go to the next row.  Make this row first.
             if count + 1 not in trace_globs:
                 trace_globs[count+1] = tuple(row_glob)
