@@ -102,24 +102,55 @@ class TraceRoute(threading.Thread):
         DELAY_UNIT_S = 2
 
         milisec = 'ms'
-        # Header = namedtuple('header', ['dest', 'dest_ip', 'max_hops', 'packet_Blen'])
         h_row= table[0]
-        header = Header(h_row[2], h_row[3].strip('(),'), int(h_row[4]), int(h_row[7]))
+        header = Header(
+            h_row[2],
+            h_row[3].strip('(),'),
+            int(h_row[4]),
+            int(h_row[7])
+        )
         trace_globs = { 0: header}
         valid = False
         for count, row in enumerate(table[1:]):
             delays = []
             state = IP_HOST_S
-            for cnt, item in row[1:]:
+            for cnt, item in enumerate(row[1:]):
                 if '*' in item:
+                    if valid:
+                        t_host = Host(
+                            hostname=host,
+                            ip=this_ip,
+                            delays=tuple(delays),
+                            delay_unit='ms'
+                        )
+                        print '\n* pack :', t_host
+                        valid = False
                     continue
 
-                if re.match(self.HOSTNAME_RE, item):
+                if state == DELAY_S and re.match(self.DELAY_RE, item):
+                    # Get the Delay number
+                    print 'd-{},'.format(item),
+                    state = DELAY_UNIT_S
+                    delays.append(item)
+                    continue
+                elif state == DELAY_UNIT_S and 'ms' == item:
+                    print 'u-{}'.format(item),
+                    state = DELAY_S
+                    valid = True
+                    continue
+                elif re.match(self.HOSTNAME_RE, item):
                     # HOSTNAME is a superset of IP_RE
+                    print '\nh-{},'.format(item),
                     host = item
 
                     if valid and len(delays) > 0:
-                        Host(hostname=host, ip=this_ip, delays=tuple(delays), delay_unit='ms')
+                        t_host = Host(
+                            hostname=host,
+                            ip=this_ip,
+                            delays=tuple(delays),
+                            delay_unit='ms'
+                        )
+                        print '\nhost:', t_host
 
                     delays = []
                     valid = False
@@ -127,29 +158,21 @@ class TraceRoute(threading.Thread):
                     continue
                 elif re.match(self.TR_IP_RE, item):
                     # (IP) is a subset of HOSTNAME_RE
+                    print 'i-{},'.format(item),
                     this_ip = item.strip('()')
 
                     state = DELAY_S
                     continue
-                elif state == DELAY_S and re.match(self.DELAY_RE, item):
-                    # Get the Delay number
-                    state = DELAY_UNIT_S
-                    delays.append(item)
-                    continue
-                elif state == DELAY_UNIT_S and 'ms' in item:
-                    state = DELAY_S
-                    valid = True
-                    continue
                 else:
-                    pass
-
-
-
+                    msg = "Failed - Cnt: {}, row: {}, ip: {}"
+                    raise Exception(
+                        msg.format(cnt, row, self.destination_ip)
+                    )
 
             # Go to the next row.  Make this row first.
-            if count + 1 not in trace_globs:
-                trace_globs[count+1] = tuple(row_glob)
-        return trace_globs
+            # if count + 1 not in trace_globs:
+            #     trace_globs[count+1] = tuple(row_glob)
+        return None # trace_globs
 
 
 class whois(object):
@@ -160,8 +183,11 @@ class whois(object):
 def test_trace_route(domain='www.google.com'):
     """Test the trace route object on domain.
     """
+    import time
     queue = Queue.Queue()
     trc = TraceRoute(domain, queue)
+    time.sleep(15)
+
     return queue.get(block=True, timeout=30)
 
 if __name__ == '__main__':
