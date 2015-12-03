@@ -42,9 +42,10 @@ class TraceRoute(threading.Thread):
     # A Delay time regular expression.  ####.###
     DELAY_RE = r'^([0-9]{1,4}\.[0-9]{1,3})$'
 
-    def __init__(self, ip, shared_queue=None):
+    def __init__(self, ip, shared_queue=None, queue_id='traceroute'):
         super(TraceRoute, self).__init__()
         self.destination_ip = ip
+        self.queue_id = queue_id
         if isinstance(shared_queue, Queue.Queue):
             self.shared_queue = shared_queue
         else:
@@ -69,7 +70,7 @@ class TraceRoute(threading.Thread):
         try:
             self._run_trace()
             self._build_table()
-            self.shared_queue.put(self.trace_map)
+            self.shared_queue.put((self.queue_id, self.trace_map))
         except:
             raise
         finally:

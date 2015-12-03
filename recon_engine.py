@@ -104,8 +104,9 @@ class ReconClient(object):
         self.sock = self.protocol.parse_cmd(self.sock.recv(MAX_MSG))
 
 class ReconServer(threading.Thread):
-    def __init__(self, shared_queue=None):
+    def __init__(self, shared_queue=None, queue_id='recon_server'):
         super(ReconServer, self).__init__()
+        self.queue_id = queue_id
         self.protocol = ReconProtocol(proto_side='server')
 
         if isinstance(shared_queue, Queue.Queue):
@@ -157,13 +158,12 @@ class ReconEngine(threading.Thread):
 
     def __init__(self):
         super(ReconEngine, self).__init__()
-        self.tracert_queue = Queue.Queue()
-        self.dns_queue = Queue.Queue()
-        self.port_queue = Queue.Queue()
 
-        self.dnsr = DNSResolver(shared_queue=self.dns_queue)
+        self.recon_queue = Queue.Queue()
+
+        self.dnsr = DNSResolver(shared_queue=self.recon_queue)
         self.rcs = ReconServer()
-        self.ipa = IPAddress()
+        #self.ipa = IPAddress()
 
         self.portscans = []
         self.traceroutes = []
@@ -183,22 +183,32 @@ class ReconEngine(threading.Thread):
             index = pool.index(th)
             pool.pop(index)
 
-    def manage_portscans(self):
+    def manage_portscans(self, pending_queue):
         self._clean_oneshot_threads(self.portscans)
+        if len(pending_queue) > 0:
+            ip = pending_queue[0]
+            if self.portscan(ip):
+                # There was room in the thread pool.
+                pending_queue.pop(0)
 
-    def manage_traceroutes(self):
+    def manage_traceroutes(self, pending_queue):
         self._clean_oneshot_threads(self.traceroutes)
+        if len(pending_queue) > 0:
+            ip = pending_queue[0]
+            if self.traceroute(ip):
+                # There was room in the thread pool.
+                pending_queue.pop(0)
 
     def traceroute(self, ip):
-        if len(self.traceroutes) <= 15:
-            troute = TraceRoute(ip, shared_queue=self.tracert_queue)
+        if len(self.traceroutes) <= 5:
+            troute = TraceRoute(ip, shared_queue=self.recon_queue)
             self.traceroutes.append(troute)
             return True
         return False
 
     def portscan(self, ip):
-        if len(self.portscans) <= 15:
-            pscan = PortScanner(ip, self.port_queue)
+        if len(self.portscans) <= 5:
+            pscan = PortScanner(ip, shared_queue=self.recon_queue)
             self.portscans.append(pscan)
             return True
         return False
@@ -214,48 +224,41 @@ class ReconEngine(threading.Thread):
         try:
             while self.alive.isSet():
                 try:
-                    dns_record = self.dns_queue.get(block=False, timeout=3)
+                    # Always push a tuple (record_type, item)
+                    record_type, record = self.recon_queue.get(block=True, timeout=3)
 
-                    fip = sorted(dns_record['ips'])[0]
-                    if fip not in records:
-                        records[fip] = dns_record
-                        tracert_qq.append(fip)
-                        portscan_qq.append(fip)
-                    # Do a record lookup on it.
-                    # print '\n\ndns_record'
-                    # print dns_record
+                    if record_type == 'dnsresolve':
+                        # We got a dnsresolver item.
+                        fip = sorted(record['ips'])[0]
+                        if fip not in records:
+                            records[fip] = record
+                            tracert_qq.append(fip)
+                            portscan_qq.append(fip)
+                    elif record_type == 'traceroute':
+                        # We got a traceroute item.
+                        for key, val in record.iteritems():
+                            print key, val
+                    elif record_type == 'port_scanner':
+                        # We got a port scanner item
+                        prettyprint.pp(record)
+                    elif record_type == 'recon_server':
+                        # We got a recon server item
+                        pass
+                    elif record_type == 'packet_sniffer':
+                        # We got a packet sniffer item
+                        # TODO LATER.
+                        pass
 
                 except Queue.Empty:
-                    pass
+                    continue
 
-                try:
-
-                    if len(tracert_qq) > 0 and self.traceroute(tracert_qq[0]):
-                        tracert_qq.pop(0)
-
-                    tracert_record = self.tracert_queue.get(block=False, timeout=3)
-                    print '\n\ntracert record'
-                    for key in tracert_record:
-                        print key, tracert_record[key]
-                    # Remove the dead thread here from traceroutes
-                    self.manage_traceroutes()
-                except Queue.Empty:
-                    pass
-
-                try:
-                    if len(portscan_qq) > 0 and self.portscan(portscan_qq[0]):
-                        portscan_qq.pop(0)
-
-                    port_record = self.port_queue.get(block=False, timeout=3)
-                    print '\n\nport record'
-                    prettyprint.pp( port_record )
-                    # Remove the dead thread here from portscans
-                    self.manage_traceroutes()
-                except Queue.Empty:
-                    pass
+                # Clean out the finished threads from the queues.
+                self.manage_portscans(portscan_qq)
+                self.manage_traceroutes(tracert_qq)
 
                 delta = time.time()
                 if 5.0 <= (delta - start):
+                    # Use a time based heartbeat.
                     print 'heartbeat'
                     start = delta
         except:

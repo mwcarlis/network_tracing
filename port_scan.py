@@ -7,8 +7,9 @@ import shlex
 from spartaparsers.Parser import Parser
 
 class PortScanner(threading.Thread):
-    def __init__(self, target, shared_queue=None):
+    def __init__(self, target, shared_queue=None, queue_id='port_scanner'):
         super(PortScanner, self).__init__()
+        self.queue_id = queue_id
         self.target = target
         self.HOST = 'nmap -n -sn -oX - {}'.format(target)
         self.CONNECT = 'nmap -sT -p1-500 -Pn -oX - {}'.format(target)
@@ -24,6 +25,7 @@ class PortScanner(threading.Thread):
         try:
             nmap = subprocess.check_output(
                 shlex.split(self.STEALTH)
+                stderr=None
             )
             parser = Parser(nmap)
             session = parser.get_session()
@@ -39,7 +41,7 @@ class PortScanner(threading.Thread):
                     if srvc is None:
                         continue
                     record[host.ip][srvc.name] = int(port)
-            self.shared_queue.put( { self.target: record } )
+            self.shared_queue.put( (self.queue_id, { self.target: record }) )
         except:
             # We don't know what we caught.
             raise

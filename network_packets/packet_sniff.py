@@ -284,8 +284,9 @@ class PacketSniffer(threading.Thread):
     """A Packet Sniffing object with threading.
     """
 
-    def __init__(self, shared_queue=None):
+    def __init__(self, shared_queue=None, queue_id='packet_sniffer'):
         super(PacketSniffer, self).__init__()
+        self.queue_id = queue_id
 
         if isinstance(shared_queue, Queue.Queue):
             self.shared_queue = shared_queue
@@ -307,7 +308,7 @@ class PacketSniffer(threading.Thread):
         while self.alive.isSet():
             pkt_obj = receive_tcp_packet(self.sock)
             # Send the packet details upstream.
-            self.shared_queue.put(pkt_obj)
+            self.shared_queue.put((self.queue_id, pkt_obj))
 
     def get_queue(self):
         return self.shared_queue

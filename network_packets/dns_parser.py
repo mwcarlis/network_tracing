@@ -6,9 +6,9 @@ import Queue
 
 class DNSResolver(threading.Thread):
 
-    def __init__(self, shared_queue=None):
+    def __init__(self, shared_queue=None, queue_id='dnsresolve'):
         super(DNSResolver, self).__init__()
-
+        self.queue_id = queue_id
         if isinstance(shared_queue, Queue.Queue):
             self.shared_queue = shared_queue
         else:
@@ -44,7 +44,12 @@ class DNSResolver(threading.Thread):
     def query_processor(self, row):
         start = 0
         valid = False
-        items = {'domain':[], 'request_id': None}
+        items = {
+            'domain_request': None,
+            'domain':[],
+            'request_id': None
+        }
+        domain_req = 0
         for val in row:
             if 'query' in val:
                 start = 1
@@ -63,6 +68,10 @@ class DNSResolver(threading.Thread):
             if start == 3:
                 # This is a Domain name.
                 items['domain'].append(val)
+                if domain_req == 0:
+                    # If this is the first domain, it's a request.
+                    items['domain_request'] = val
+                domain_req += 1
                 continue
             else:
                 # Everything else.
@@ -112,7 +121,8 @@ class DNSResolver(threading.Thread):
                 request = self.pending_requests.pop(items['request_id'])
                 for domain in request['domain']:
                     items['domain'].append(domain)
-                self.shared_queue.put(items)
+                items['domain_request'] = request['domain_request']
+                self.shared_queue.put((self.queue_id, items))
         else:
             # print '\n\n failed_dang'
             # print items
