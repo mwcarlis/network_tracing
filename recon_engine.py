@@ -120,7 +120,7 @@ class ReconServer(threading.Thread):
     def connect(self):
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
+            sock.settimeout(2)
             sock.bind(LOCALHOST)
             sock.listen(1)
         except socket.error, msg:
@@ -154,6 +154,9 @@ class ReconServer(threading.Thread):
             except:
                 pass
 
+    def get_queue(self):
+        return self.shared_queue
+
 class ReconEngine(threading.Thread):
 
     def __init__(self):
@@ -162,8 +165,8 @@ class ReconEngine(threading.Thread):
         self.recon_queue = Queue.Queue()
 
         self.dnsr = DNSResolver(shared_queue=self.recon_queue)
-        self.rcs = ReconServer()
-        #self.ipa = IPAddress()
+        # self.rcs = ReconServer()
+        # self.ipa = IPAddress()
 
         self.portscans = []
         self.traceroutes = []
@@ -185,7 +188,8 @@ class ReconEngine(threading.Thread):
 
     def manage_portscans(self, pending_queue):
         self._clean_oneshot_threads(self.portscans)
-        if len(pending_queue) > 0:
+        num_pending = len(pending_queue)
+        if num_pending > 0:
             ip = pending_queue[0]
             if self.portscan(ip):
                 # There was room in the thread pool.
@@ -193,21 +197,26 @@ class ReconEngine(threading.Thread):
 
     def manage_traceroutes(self, pending_queue):
         self._clean_oneshot_threads(self.traceroutes)
-        if len(pending_queue) > 0:
+        num_pending = len(pending_queue)
+        if num_pending > 0:
             ip = pending_queue[0]
             if self.traceroute(ip):
                 # There was room in the thread pool.
                 pending_queue.pop(0)
 
     def traceroute(self, ip):
-        if len(self.traceroutes) <= 5:
+        MAX_ROUTES = 2
+        length = len(self.traceroutes)
+        if length <= MAX_ROUTES:
             troute = TraceRoute(ip, shared_queue=self.recon_queue)
             self.traceroutes.append(troute)
             return True
         return False
 
     def portscan(self, ip):
-        if len(self.portscans) <= 5:
+        MAX_SCANS = 5
+        length = len(self.portscans)
+        if length <= MAX_SCANS:
             pscan = PortScanner(ip, shared_queue=self.recon_queue)
             self.portscans.append(pscan)
             return True
@@ -217,10 +226,10 @@ class ReconEngine(threading.Thread):
     def run(self):
         start = time.time()
         records = {}
-        inquiry_queue = []
         tracert_qq = []
         portscan_qq = []
-        fip = None
+        scanned = {}
+        routed = {}
         try:
             while self.alive.isSet():
                 try:
@@ -230,10 +239,18 @@ class ReconEngine(threading.Thread):
                     if record_type == 'dnsresolve':
                         # We got a dnsresolver item.
                         fip = sorted(record['ips'])[0]
-                        if fip not in records:
+                        if fip and ( fip not in records ):
                             records[fip] = record
-                            tracert_qq.append(fip)
-                            portscan_qq.append(fip)
+                            domain = record['domain_request']
+                            if not domain:
+                                print 'routed domain', domain
+                                continue
+                            if domain not in routed:
+                                tracert_qq.append(domain)
+                                routed[domain] = True
+                            if domain not in scanned:
+                                portscan_qq.append(domain)
+                                scanned[domain] = True
                     elif record_type == 'traceroute':
                         # We got a traceroute item.
                         for key, val in record.iteritems():
@@ -248,25 +265,50 @@ class ReconEngine(threading.Thread):
                         # We got a packet sniffer item
                         # TODO LATER.
                         pass
+                    elif record_type == 'user_request':
+                        # The queue will receive user requests.
+                        # TODO LATER.
+                        pass
 
                 except Queue.Empty:
                     continue
+
+                finally:
+                    delta = time.time()
+                    if 5.0 <= (delta - start):
+                        # Use a time based heartbeat.
+                        print 'heartbeat'
+                        start = delta
 
                 # Clean out the finished threads from the queues.
                 self.manage_portscans(portscan_qq)
                 self.manage_traceroutes(tracert_qq)
 
-                delta = time.time()
-                if 5.0 <= (delta - start):
-                    # Use a time based heartbeat.
-                    print 'heartbeat'
-                    start = delta
         except:
             raise
         finally:
+            # Spin down the beast
+            # Wait for the child threads to stop.
+            # TODO: See if daemon threads are safe.
             self.dnsr.alive.clear()
-            self.rcs.alive.clear()
+            # self.rcs.alive.clear()
+            tracert_qq = []
+            portscan_qq = []
+            stime = time.time()
+            # Lets spin down the threads.
+            while len(self.portscans) > 0 and len(self.traceroutes) > 0:
+                if time.time() - stime > 5:
+                    print '\n\n'
+                    print self.traceroutes
+                    print self.portscans
+                    stime = time.time()
 
+                self.manage_traceroutes(tracert_qq)
+                self.manage_portscans(portscan_qq)
+                try:
+                    self.recon_queue.get(block=True, timeout=0.1)
+                except Queue.Empty:
+                    continue
 
 if __name__ == "__main__":
     import time
@@ -275,8 +317,14 @@ if __name__ == "__main__":
         sys.exit("\nOnly a root user can run this\n")
 
     rc = ReconEngine()
-    time.sleep(60)
-    rc.alive.clear()
+    try:
+        time.sleep(120)
+    except:
+        if rc.alive.isSet():
+            rc.alive.clear()
+        raise
+    finally:
+        rc.alive.clear()
 
 
 

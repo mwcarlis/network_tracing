@@ -55,8 +55,12 @@ class TraceRoute(threading.Thread):
         self.start()
 
     def _run_trace(self):
-        trace = subprocess.check_output([self.PROGRAM, self.destination_ip])
-        self.raw_trace = trace.strip()
+        try:
+            trace = subprocess.check_output([self.PROGRAM, self.destination_ip])
+            self.raw_trace = trace.strip()
+        except Exception, excp:
+            excp.message = excp.message + ' TraceRoute.t_run_trace'
+            raise excp
 
     def _build_table(self):
         table = []
@@ -189,7 +193,11 @@ def test_trace_route(domain='www.google.com'):
     import time
     queue = Queue.Queue()
     trc = TraceRoute(domain, queue)
-    time.sleep(15)
+    try:
+        time.sleep(15)
+    except:
+        trc.alive.clear()
+        raise
 
     return queue.get(block=True, timeout=30)
 
