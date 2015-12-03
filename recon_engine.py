@@ -33,15 +33,37 @@ class ReconProtocol(object):
     ARG_MESSAGE = 3
     ARG_RECV    = 4
 
-    def __init__(self, proto_side='client'):
+    def __init__(self, proto_side='client',
+        shared_queue=None,
+        server_alive=None,
+        queue_id='user_request'
+    ):
+        """(shared_queue AND server_alive) -> iff -> proto_side='server'
+        """
         self.iface = MockIface()
         if proto_side == 'client':
+            # The client is easy
             self.parse_cmd = self.parse_client
+
         elif proto_side == 'server':
+            # The server protocol is aware of the active server.
             self.parse_cmd = self.parse_server
+            if not isinstance(shared_queue, Queue.Queue):
+                msg = 'shared_queue type, expected: {} got: {}'
+                raise ValueError(msg.format('Queue', shared_queue))
+            if not server_alive:
+                msg = 'server_alive type, expected: {} got: {}'
+                raise ValueError(msg.format('threading.Event:', server_alive))
+            self.shared_queue=shared_queue
+            self.server_alive = server_alive
+            self.queue_id = queue_id
+            self.engine_queue = Queue.Queue()
 
     def new_iface(self, iface):
         self.iface = iface
+
+    def put_reply(self, reply):
+        self.engine_queue.put(reply)
 
     def parse_client(self, message=''):
         items = message.split('-')
@@ -59,23 +81,40 @@ class ReconProtocol(object):
 
     def parse_server(self, message=''):
         items = message.split('-')
-        if 'cm.echo' in items:
+        header = [items[0]]
+        if 'cm.echo' == header:
             reply = 'cm.print-{}'.format(items[-1])
             self.iface.sendall(reply)
             return self.iface
-        elif 'cm.print' in items:
+        elif 'cm.print' == header:
             print message
             reply = 'cm.stop-{}'.format(items[-1])
             self.iface.sendall(reply)
             self.iface.close()
             self.iface = None
-            return None
-        elif 'cm.stop' in items:
+            return self.iface
+        elif 'cm.stop' == header:
             reply = 'cm.stop-dummy'
             self.iface.sendall(reply)
             self.iface.close()
             self.iface = None
-            return None
+            return self.iface
+        elif 'cm.args' == header:
+            # Users passed arguments into the server.
+            # Put these arguments in the ReconEngine Queue.
+            self.shared_queue.put((self.queue_id, items[-1]))
+            while self.server_alive.isSet():
+                # Expect a reply from ReconEngine for these arguments.
+                try:
+                    body = self.engine_queue.get(block=True, timeout=2)
+                except Queue.Empty:
+                    continue
+                reply = 'cm.print-{}'.format(body)
+                # Once we reply to the client request, stop the communication.
+                self.iface.sendall(reply)
+                self.iface.close()
+                self.iface = None
+            return self.iface
 
 
 class ReconClient(object):
@@ -106,14 +145,22 @@ class ReconClient(object):
 class ReconServer(threading.Thread):
     def __init__(self, shared_queue=None, queue_id='recon_server'):
         super(ReconServer, self).__init__()
+        # Tell the Server when to stop being alive.
+        self.alive = threading.Event()
         self.queue_id = queue_id
-        self.protocol = ReconProtocol(proto_side='server')
 
+        # The server has a protocol
+        self.protocol = ReconProtocol(
+            proto_side='server',
+            shared_queue=shared_queue,
+            server_alive=self.alive
+        )
         if isinstance(shared_queue, Queue.Queue):
             self.shared_queue = shared_queue
         else:
             self.shared_queue = Queue.Queue()
-        self.alive = threading.Event()
+
+        # Set the server alive.
         self.alive.set()
         self.start()
 
@@ -154,8 +201,53 @@ class ReconServer(threading.Thread):
             except:
                 pass
 
+    def reply_user(self, reply):
+        if self.protocol.expected_reply:
+            self.protocol.put_reply(reply)
+            return True
+        return False
+
     def get_queue(self):
         return self.shared_queue
+
+class JobMgmt(object):
+    def __init__(self, factory, job_limit=5):
+        self.factory = factory
+        self.pending_qq = []
+        self.running_qq = []
+        self.job_limit = job_limit
+
+    def _clean_jobs(self):
+        dead_threads = []
+        for th in self.running_qq:
+            if not th.alive:
+                # Get the dead scans
+                dead_threads.append(th)
+        for th in dead_threads:
+            # Remove the dead scans
+            index = self.running_qq.index(th)
+            self.running_qq.pop(index)
+
+    def queue_job(self, target, priority='false'):
+        if priority:
+            self.pending_qq.insert(0, target)
+        else:
+            self.pending_qq.append(target)
+
+    def _schedule_job(self):
+        jobs_active = len(self.running_qq)
+        if jobs_active <= self.job_limit:
+            target = self.pending_qq.pop(0)
+            thread = self.factory(target)
+            self.running_qq.append(thread)
+            return True
+        return False
+
+    def manage_jobs(self):
+        self._clean_jobs()
+        if self.pending_qq > 0:
+            self._schedule_job()
+
 
 class ReconEngine(threading.Thread):
 
@@ -165,7 +257,7 @@ class ReconEngine(threading.Thread):
         self.recon_queue = Queue.Queue()
 
         self.dnsr = DNSResolver(shared_queue=self.recon_queue)
-        # self.rcs = ReconServer()
+        self.rcs = ReconServer(shared_queue=self.recon_queue)
         # self.ipa = IPAddress()
 
         self.portscans = []
@@ -176,6 +268,8 @@ class ReconEngine(threading.Thread):
         self.start()
 
     def _clean_oneshot_threads(self, pool):
+        """Remove the dead threads that run as oneshots from running pool.
+        """
         dead_threads = []
         for th in pool:
             if not th.alive:
@@ -186,50 +280,52 @@ class ReconEngine(threading.Thread):
             index = pool.index(th)
             pool.pop(index)
 
-    def manage_portscans(self, pending_queue):
-        self._clean_oneshot_threads(self.portscans)
-        num_pending = len(pending_queue)
+    def manage_threads(self, pending_qq, running_qq, obj_factory):
+        """Mange running and queued threads of type obj_factory.
+        """
+        self._clean_oneshot_threads(running_qq)
+        num_pending = len(pending_qq)
         if num_pending > 0:
-            ip = pending_queue[0]
-            if self.portscan(ip):
+            target = pending_qq[0]
+            if self.spin_thread(target, running_qq, obj_factory):
                 # There was room in the thread pool.
-                pending_queue.pop(0)
+                pending_qq.pop(0)
 
-    def manage_traceroutes(self, pending_queue):
-        self._clean_oneshot_threads(self.traceroutes)
-        num_pending = len(pending_queue)
-        if num_pending > 0:
-            ip = pending_queue[0]
-            if self.traceroute(ip):
-                # There was room in the thread pool.
-                pending_queue.pop(0)
+    def manage_user_requests(self, user_qq):
+        """Manage the user requests from client to ReconServer.
+        """
+        pass
 
-    def traceroute(self, ip):
-        MAX_ROUTES = 2
-        length = len(self.traceroutes)
-        if length <= MAX_ROUTES:
-            troute = TraceRoute(ip, shared_queue=self.recon_queue)
-            self.traceroutes.append(troute)
+    def spin_thread(self, target, running_qq, obj_factory):
+        """Spin up a thread-target of type-obj_factory & add to running queue.
+        """
+        MAX_SPINNING = 4
+        length = len(running_qq)
+        if length <= MAX_SPINNING:
+            thread = obj_factory(target, shared_queue=self.recon_queue)
+            running_qq.append(thread)
             return True
         return False
 
-    def portscan(self, ip):
-        MAX_SCANS = 5
-        length = len(self.portscans)
-        if length <= MAX_SCANS:
-            pscan = PortScanner(ip, shared_queue=self.recon_queue)
-            self.portscans.append(pscan)
-            return True
-        return False
-
+    def _queue_up(self, record, wait_queues, record_maps):
+        """Add record.domain to the wait_queues and remember in record_maps.
+        """
+        domain = record['domain_request']
+        if not domain:
+            return False
+        for w_qq, rec_map in zip(wait_queues, record_maps):
+            if domain not in rec_map:
+                w_qq.append(domain)
+                rec_map[domain] = True
+        return True
 
     def run(self):
         start = time.time()
-        records = {}
         tracert_qq = []
         portscan_qq = []
-        scanned = {}
-        routed = {}
+        wait_queues = (tracert_qq, portscan_qq)
+        user_qq = []
+        record_maps = ({}, {})
         try:
             while self.alive.isSet():
                 try:
@@ -237,24 +333,14 @@ class ReconEngine(threading.Thread):
                     record_type, record = self.recon_queue.get(block=True, timeout=3)
 
                     if record_type == 'dnsresolve':
-                        # We got a dnsresolver item.
-                        fip = sorted(record['ips'])[0]
-                        if fip and ( fip not in records ):
-                            records[fip] = record
-                            domain = record['domain_request']
-                            if not domain:
-                                print 'routed domain', domain
-                                continue
-                            if domain not in routed:
-                                tracert_qq.append(domain)
-                                routed[domain] = True
-                            if domain not in scanned:
-                                portscan_qq.append(domain)
-                                scanned[domain] = True
+                        # We got a dnsresolver item. Queue up some jobs.
+                        if not self._queue_up(record, wait_queues, record_maps):
+                            continue
                     elif record_type == 'traceroute':
                         # We got a traceroute item.
                         for key, val in record.iteritems():
                             print key, val
+                        print '\n\n'
                     elif record_type == 'port_scanner':
                         # We got a port scanner item
                         prettyprint.pp(record)
@@ -268,6 +354,7 @@ class ReconEngine(threading.Thread):
                     elif record_type == 'user_request':
                         # The queue will receive user requests.
                         # TODO LATER.
+                        # user_qq.append(request)
                         pass
 
                 except Queue.Empty:
@@ -281,8 +368,9 @@ class ReconEngine(threading.Thread):
                         start = delta
 
                 # Clean out the finished threads from the queues.
-                self.manage_portscans(portscan_qq)
-                self.manage_traceroutes(tracert_qq)
+                self.manage_threads(tracert_qq, self.traceroutes, TraceRoute)
+                self.manage_threads(portscan_qq, self.portscans, PortScanner)
+                self.manage_user_requests(user_qq)
 
         except:
             raise
@@ -291,7 +379,8 @@ class ReconEngine(threading.Thread):
             # Wait for the child threads to stop.
             # TODO: See if daemon threads are safe.
             self.dnsr.alive.clear()
-            # self.rcs.alive.clear()
+            self.rcs.alive.clear()
+
             tracert_qq = []
             portscan_qq = []
             stime = time.time()
@@ -303,8 +392,9 @@ class ReconEngine(threading.Thread):
                     print self.portscans
                     stime = time.time()
 
-                self.manage_traceroutes(tracert_qq)
-                self.manage_portscans(portscan_qq)
+                self.manage_threads(tracert_qq, self.traceroutes, TraceRoute)
+                self.manage_threads(portscan_qq, self.portscans, PortScanner)
+                self.manage_user_requests(user_qq)
                 try:
                     self.recon_queue.get(block=True, timeout=0.1)
                 except Queue.Empty:
@@ -317,8 +407,9 @@ if __name__ == "__main__":
         sys.exit("\nOnly a root user can run this\n")
 
     rc = ReconEngine()
+    start = time.time()
     try:
-        time.sleep(120)
+        time.sleep(60)
     except:
         if rc.alive.isSet():
             rc.alive.clear()
