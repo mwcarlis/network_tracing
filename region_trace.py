@@ -179,7 +179,7 @@ class TraceRoute(threading.Thread):
             else:
                 # This hop doesn't like traceroute.
                 trace_globs[count+1] = None
-        return trace_globs
+        return { 'domain_request': self.destination_ip, self.destination_ip: trace_globs }
 
 
 class whois(object):

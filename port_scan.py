@@ -41,7 +41,9 @@ class PortScanner(threading.Thread):
                     if srvc is None:
                         continue
                     record[host.ip][srvc.name] = int(port)
-            self.shared_queue.put( (self.queue_id, { self.target: record }) )
+
+            ret_v = { 'domain_request': self.target, self.target: record }
+            self.shared_queue.put(( self.queue_id, ret_v ))
         except:
             # We don't know what we caught.
             raise

@@ -4,12 +4,20 @@
 import time
 import threading
 import socket
+import heapq
 import Queue
+
+import filelock
+import prettyprint
+
 from region_trace import TraceRoute
-from network_packets.dns_parser import DNSResolver
 from ip_address import IPAddress
 from port_scan import PortScanner
-import prettyprint
+from network_packets.dns_parser import DNSResolver
+
+
+SERVER_LOCKFILE_WAIT = '.recon_server.lock'
+SERVER_LOCKFILE_ALIVE = '.recon_server_running.lock'
 
 LOCALHOST = ('localhost', 5555)
 MAX_MSG = 1024
@@ -72,6 +80,7 @@ class ReconProtocol(object):
             self.iface.sendall(reply)
             return self.iface
         elif 'cm.print' in items:
+            print items[1]
             return self.iface
         elif 'cm.stop' in items:
             self.iface.close()
@@ -177,24 +186,51 @@ class ReconServer(threading.Thread):
             raise
         self.sock = sock
 
+    def _manage_connection(self, wait_flock):
+        try:
+            with wait_flock.acquire(timeout=2):
+                if self.connection is None:
+                    self.connection, self.client_address = self.sock.accept()
+                    self.protocol.new_iface(self.connection)
+                    print 'connected'
+            command = self.connection.recv(MAX_MSG)
+            self.connection = self.protocol.parse_cmd(command)
+        except filelock.Timeout:
+            raise
+        except socket.timeout:
+            # heartbeat to end the thread.
+            pass
+
     def run(self):
         self.connection = None
+        server_alive_flock = filelock.FileLock(SERVER_LOCKFILE_ALIVE)
+        server_wait_flock = filelock.FileLock(SERVER_LOCKFILE_WAIT)
         try:
-            self.connect()
-            while self.alive.isSet():
-                try:
-                    if self.connection is None:
-                        try:
-                            self.connection, self.client_address = self.sock.accept()
-                            self.protocol.new_iface(self.connection)
-                            print 'connected'
-                        except socket.timeout:
-                            raise
-                    command = self.connection.recv(MAX_MSG)
-                    self.connection = self.protocol.parse_cmd(command)
-                except socket.timeout:
-                    # heartbeat to end the thread.
-                    continue
+            with server_alive_flock.acquire(timeout=0):
+                self.connect()
+                while self.alive.isSet():
+                    self._manage_connection(server_wait_flock)
+            #self._manage_connection(server_alive_flock, server_wait_flock)
+            # with server_alive_flock.acquire():
+            #     self.connect()
+            #     while self.alive.isSet():
+            #         try:
+            #             if self.connection is None:
+            #                 try:
+            #                     with server_wait_flock.acquire(timeout=2):
+            #                         try:
+            #                             self.connection, self.client_address = self.sock.accept()
+            #                             self.protocol.new_iface(self.connection)
+            #                             print 'connected'
+            #                         except socket.timeout:
+            #                             raise
+            #                 except filelock.Timeout:
+            #                     raise
+            #             command = self.connection.recv(MAX_MSG)
+            #             self.connection = self.protocol.parse_cmd(command)
+            #         except socket.timeout:
+            #             # heartbeat to end the thread.
+            #             continue
         except:
             raise
         finally:
@@ -243,8 +279,10 @@ class JobMgmt(object):
         """
         if priority and ( target not in self.record ):
             self.pending_qq.insert(0, target)
+            self.record[target] = True
         elif target not in self.record:
             self.pending_qq.append(target)
+            self.record[target] = True
 
     def _schedule_job(self):
         """If our job_limit allows, schedule a job.
@@ -268,6 +306,83 @@ class JobMgmt(object):
             self._schedule_job()
         return len(self.running_qq)
 
+class DNSCache(object):
+    """A dns cache which is very fast to search for records.
+    """
+    def __init__(self, cache_limit=1000):
+        self.dns_cache = {}
+        self.cache_limit = cache_limit
+        self.CACHE_ID = 'cach_id'
+        self.CACHE_RECORD = 'cache_record'
+        self.cache_size = 0
+        self.cache_total = 0
+        self.dns_record_map = {}
+
+    def add_record(self, dns_record):
+        """Add a dns record to the dns_cache.
+        """
+        self.cache_size += 1
+        self.cache_total += 1
+
+        # The records id is the total record cnt
+        record_id = self.cache_total
+        self.dns_record_map[record_id] = dns_record
+        for ip in dns_record['ips']:
+            self.dns_cache[ip] = record_id
+        for domain in dns_record['domain']:
+            self.dns_cache[domain] = record_id
+
+    def remove_record(self, dns_record):
+        """Remove a record from DNSCache.
+        """
+        record_ids = []
+        for ip in dns_record['ips']:
+            # Remove the ip's from cache.
+            if ip in self.dns_cache:
+                record_ids.append(self.dns_cache.pop(ip))
+                self.cache_size -= 1
+        for domain in dns_record['domain']:
+            # Remove the domain's from cache.
+            if domain in self.dns_cache:
+                record_ids.append(self.dns_cache.pop(domain))
+                self.cache_size -= 1
+        for rec_id in record_ids:
+            # Remove all record_id's from the dns_records
+            if rec_id in self.dns_record_map:
+                self.dns_record_map.pop(record_id)
+
+    def is_record(self, dns_record):
+        """True if a record exists.
+        """
+        for key in ['ips', 'domain']:
+            for target in dns_record[key]:
+                if target in self.dns_cache:
+                    return True
+        return False
+
+    def _merge_record(self, dns_record):
+        """Try to get a record from DNSCache
+        """
+        ret_record = {
+            'ips': [],
+            'domain': [],
+        }
+        for ip in dns_record['ips']:
+            # Get the ips that we have for this record.
+            if ip not in ret_record['ips']:
+                ret_record['ips'].append(ip)
+        for domain in dns_record['domain']:
+            # Get the domains we have for this record.
+            if ip not in ret_record['domain']:
+                ret_record['domain'].append(domain)
+        return ret_record
+
+    def find_record(self, host_ip):
+        if host_ip in self.dns_cache:
+            record_id = self.dns_cache[host_ip]
+            a_record = self.dns_record_map[record_id]
+            return self._merge_record(a_record)
+
 
 class ReconEngine(threading.Thread):
 
@@ -278,7 +393,7 @@ class ReconEngine(threading.Thread):
 
         self.dnsr = DNSResolver(shared_queue=self.recon_queue)
         self.rcs = ReconServer(shared_queue=self.recon_queue)
-        # self.ipa = IPAddress()
+        self.ipa = IPAddress()
 
         self.portscan_job = JobMgmt(PortScanner, self.recon_queue, job_limit=4)
         self.traceroute_job = JobMgmt(TraceRoute, self.recon_queue, job_limit=2)
@@ -301,9 +416,18 @@ class ReconEngine(threading.Thread):
     def manage_user_requests(self, pending_qq):
         pass
 
+
     def run(self):
+        """This is the master state machine of the ReconEngine.  All of
+        the state machine revolves around a Queue protocol from it's many
+        producer threads.
+        """
         start = time.time()
+        pending_queue = {}
+        hosts_seen = {}
+        knowledge = {}
         user_qq = []
+        dns_cache = DNSCache()
         try:
             while self.alive.isSet():
                 try:
@@ -311,16 +435,31 @@ class ReconEngine(threading.Thread):
                     record_type, record = self.recon_queue.get(block=True, timeout=3)
 
                     if record_type == 'dnsresolve':
+                        # TODO For now assume dns is faster than the other jobs.
+                        # Could be missing requests associated with other jobs.
                         # We got a dnsresolver item. Queue up some jobs.
-                        pass
+                        if dns_cache.is_record(record):
+                            return
+                        # We don't know about this packet
+                        dns_cache.add_record(record)
+
                     elif record_type == 'traceroute':
                         # We got a traceroute item.
-                        for key, val in record.iteritems():
-                            print key, val
-                        print '\n\n'
+                        domain_req = record['domain_request']
+                        knowledge[domain_req][record_type] = record[domain_req]
+                        pending_queue[domain_req][record_type] = True
+
+                        # for key, val in record.iteritems():
+                        #     print key, val
+                        # print '\n\n'
                     elif record_type == 'port_scanner':
                         # We got a port scanner item
+                        print 'port_scan',
                         prettyprint.pp(record)
+                        domain_req = record['domain_request']
+                        knowledge[domain_req][record_type] = record[domain_req]
+                        pending_queue[domain_req][record_type] = True
+
                     elif record_type == 'recon_server':
                         # We got a recon server item
                         pass
@@ -335,8 +474,25 @@ class ReconEngine(threading.Thread):
                         print 'record', record
                         if not self._queue_up({ 'domain_request': record }):
                             continue
+                        knowledge[record] = {}
+                        pending_queue[record] = {
+                                'port_scanner': False,
+                                'traceroute': False,
+                                # 'dnsrecord': False,
+                        }
                         self.rcs.reply_user('hello_engine')
+
+                    else:
+                        # Leave this here for clarity.
                         pass
+                    for req_name, val in pending_queue.iteritems():
+                        if val['port_scanner'] and val['traceroute']:
+                            dns_rec = dns_cache.find_record(req_name)
+                            # pending_queue[req_name]['dnsresolve'] = dns_ec
+                            pending_queue[req_name]['dnsresolve'] = dns_rec
+                            print 'pp_queue', pending_queue[req_name]
+
+
 
                 except Queue.Empty:
                     continue
@@ -348,10 +504,13 @@ class ReconEngine(threading.Thread):
                         print 'heartbeat'
                         start = delta
 
+
                 # Clean out the finished threads from the queues.
                 for job_mgr in self.jobs:
                     job_mgr.manage_jobs()
                 self.manage_user_requests(user_qq)
+            print 'endofloop',
+            prettyprint.pp(knowledge)
 
         except:
             raise
