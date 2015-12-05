@@ -14,7 +14,7 @@ class PortScanner(threading.Thread):
         self.target = target
         self.HOST = 'nmap -n -sn -oX - {}'.format(target)
         self.CONNECT = 'nmap -sT -p1-500 -Pn -oX - {}'.format(target)
-        self.STEALTH = 'nmap -sS -p79-81 -Pn -oX - {}'.format(target)
+        self.STEALTH = 'nmap -sS -p1-500 -Pn -oX - {}'.format(target)
         if isinstance(shared_queue, Queue.Queue):
             self.shared_queue = shared_queue
         else:

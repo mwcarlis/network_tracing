@@ -2,6 +2,7 @@
 """
 
 import time
+import ast
 import threading
 import socket
 import heapq
@@ -20,7 +21,7 @@ SERVER_LOCKFILE_WAIT = '.recon_server.lock'
 SERVER_LOCKFILE_ALIVE = '.recon_server_running.lock'
 
 LOCALHOST = ('localhost', 5555)
-MAX_MSG = 1024
+MAX_MSG = 10*1024
 
 class MockIface(object):
     def __init__(self):
@@ -74,13 +75,14 @@ class ReconProtocol(object):
         self.engine_queue.put(reply)
 
     def parse_client(self, message=''):
-        items = message.split('-')
+        items = message.split('---')
         if 'cm.echo' in items:
-            reply = 'cm.print-{}'.format(items[-1])
+            reply = 'cm.print---{}'.format(items[-1])
             self.iface.sendall(reply)
             return self.iface
         elif 'cm.print' in items:
-            print items[1]
+            print len(items)
+            prettyprint.pp(items[1])
             return self.iface
         elif 'cm.stop' in items:
             self.iface.close()
@@ -88,20 +90,20 @@ class ReconProtocol(object):
             return None
 
     def parse_server(self, message=''):
-        items = message.split('-')
+        items = message.split('---')
         header = items[0]
         if 'cm.echo' == header:
-            reply = 'cm.print-{}'.format(items[-1])
+            reply = 'cm.print---{}'.format(items[-1])
             self.iface.sendall(reply)
             return self.iface
         elif 'cm.print' == header:
-            reply = 'cm.stop-{}'.format(items[-1])
+            reply = 'cm.stop---{}'.format(items[-1])
             self.iface.sendall(reply)
             self.iface.close()
             self.iface = None
             return self.iface
         elif 'cm.stop' == header:
-            reply = 'cm.stop-dummy'
+            reply = 'cm.stop---dummy'
             self.iface.sendall(reply)
             self.iface.close()
             self.iface = None
@@ -119,7 +121,7 @@ class ReconProtocol(object):
                     self.expected_reply = False
                 except Queue.Empty:
                     continue
-                reply = 'cm.print-{}'.format(body)
+                reply = 'cm.print---{}'.format(body)
                 # Once we reply to the client request, stop the communication.
                 self.iface.sendall(reply)
                 self.iface.close()
@@ -179,6 +181,7 @@ class ReconServer(threading.Thread):
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, MAX_MSG)
             sock.bind(LOCALHOST)
             sock.listen(1)
         except socket.error, msg:
@@ -210,27 +213,6 @@ class ReconServer(threading.Thread):
                 self.connect()
                 while self.alive.isSet():
                     self._manage_connection(server_wait_flock)
-            #self._manage_connection(server_alive_flock, server_wait_flock)
-            # with server_alive_flock.acquire():
-            #     self.connect()
-            #     while self.alive.isSet():
-            #         try:
-            #             if self.connection is None:
-            #                 try:
-            #                     with server_wait_flock.acquire(timeout=2):
-            #                         try:
-            #                             self.connection, self.client_address = self.sock.accept()
-            #                             self.protocol.new_iface(self.connection)
-            #                             print 'connected'
-            #                         except socket.timeout:
-            #                             raise
-            #                 except filelock.Timeout:
-            #                     raise
-            #             command = self.connection.recv(MAX_MSG)
-            #             self.connection = self.protocol.parse_cmd(command)
-            #         except socket.timeout:
-            #             # heartbeat to end the thread.
-            #             continue
         except:
             raise
         finally:
@@ -244,6 +226,8 @@ class ReconServer(threading.Thread):
                 pass
 
     def reply_user(self, reply):
+        print 'replen', len(reply)
+        print reply
         if self.protocol.expected_reply:
             self.protocol.put_reply(reply)
             return True
@@ -480,7 +464,7 @@ class ReconEngine(threading.Thread):
                                 'traceroute': False,
                                 # 'dnsrecord': False,
                         }
-                        self.rcs.reply_user('hello_engine')
+                        # self.rcs.reply_user('hello_engine')
 
                     else:
                         # Leave this here for clarity.
@@ -491,6 +475,7 @@ class ReconEngine(threading.Thread):
                             # pending_queue[req_name]['dnsresolve'] = dns_ec
                             pending_queue[req_name]['dnsresolve'] = dns_rec
                             print 'pp_queue', pending_queue[req_name]
+                            self.rcs.reply_user(prettyprint.pp_str(knowledge))
 
 
 
@@ -510,6 +495,7 @@ class ReconEngine(threading.Thread):
                     job_mgr.manage_jobs()
                 self.manage_user_requests(user_qq)
             print 'endofloop',
+            #self.rcs.reply_user(prettyprint.pp_str(knowledge))
             prettyprint.pp(knowledge)
 
         except:
